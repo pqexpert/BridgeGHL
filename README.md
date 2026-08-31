@@ -1,27 +1,36 @@
 # BridgeGHL
 
-**A governed write bridge for CRM automation: dry-run first, execute deliberately, leave an audit trail.**
+**A governed write bridge for CRM automation: dry-run first, execute only inside an explicit allowlist, and verify every mutation by readback.**
 
-BridgeGHL is a small FastAPI service for one specific problem: how do you let an AI-assisted or automated workflow update HighLevel **without handing the client direct CRM credentials or turning every suggestion into an immediate mutation?**
+BridgeGHL is the server-side HighLevel write boundary for bounded automation. It keeps the HighLevel credential out of clients and prompts, rejects unsupported actions, preserves an audit trail, and treats readback—not an HTTP success code—as the completion signal.
 
-The answer here is deliberately boring in the best way: keep the credential server-side, expose a narrow allowlisted write surface, preview the mutation, execute only through the controlled endpoint, and record what happened.
+> **Maturity:** governed reference implementation / active runtime hardening. This public repository does not claim that a production tenant or public endpoint is currently healthy unless runtime evidence says so.
 
-> **Maturity:** reference implementation / active development. This public repository does not claim that a production HighLevel tenant, public endpoint, or customer deployment is currently live.
+## Current unattended mutation envelope
 
-## Why this exists
+Allowed only when the bridge reports `HEALTHY`:
 
-Automation becomes dangerous when convenience erases the difference between *reasoning about a change* and *making the change*.
+- update an **existing opportunity** via `PUT /opportunities/:id`;
+- set opportunity pipeline stage;
+- set opportunity status;
+- assign opportunity owner;
+- set only custom-field IDs explicitly listed in `HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS`;
+- normalize only contact tags explicitly listed in `HIGHLEVEL_APPROVED_CONTACT_TAGS`.
 
-BridgeGHL separates those steps:
+Not allowed for unattended execution:
 
-1. **Dry run** — validate the request and show the outbound mutation without changing CRM state.
-2. **Execute** — perform the bounded mutation through the server-side credential boundary.
-3. **Audit** — write a machine-readable record of the action.
-4. **Read back** — the operating workflow should verify the resulting CRM state before calling the work complete.
+- contact create/upsert;
+- opportunity create/delete;
+- appointments;
+- messaging;
+- workflow activation;
+- bulk mutation;
+- destructive synchronization;
+- unallowlisted custom fields or tags.
 
-That pattern is useful well beyond one CRM: it is a small example of how I prefer to build automation around consequential systems — explicit authority, least privilege, reversibility where possible, and evidence after execution.
+The legacy contact-upsert routes intentionally return `410 Gone`.
 
-## Current API surface
+## API surface
 
 ### Health
 
@@ -29,75 +38,60 @@ That pattern is useful well beyond one CRM: it is a small example of how I prefe
 GET /health
 ```
 
-### Dry run
+Health is truthful and fail-closed. `HEALTHY` requires protected runtime configuration, a writable audit path, live-write enablement, and a successful HighLevel readback check. Otherwise the service reports `DEGRADED`, `UNCONFIGURED`, or `ERROR`.
+
+### Opportunity update
 
 ```http
-POST /dry-run/contact/upsert
+POST /dry-run/opportunity/update
+POST /execute/opportunity/update
 ```
 
-Validates the payload and returns the HighLevel request that would be sent. **No CRM mutation occurs.**
+Dry-run validates the exact target and allowlist without mutation. Execute performs pre-write readback, the bounded `PUT /opportunities/:id`, post-write readback, verification, and audit logging.
 
-### Execute
+### Contact tag normalization
 
 ```http
-POST /execute/contact/upsert
+POST /dry-run/contact/tags
+POST /execute/contact/tags
 ```
 
-Performs the allowed mutation and writes an audit record.
+Execute reads current tags first, mutates only effective allowlisted differences, compensates newly-added tags if a later remove step fails, then reads back and verifies the resulting state.
 
-### Deprecated
+## Required environment
 
-```http
-POST /contacts/upsert
-```
+See `.env.example`.
 
-Retained only for legacy compatibility; new integrations should use the dry-run / execute flow.
+Secrets and account identifiers belong only in the approved server-side runtime/secret store. Do not commit real values.
 
-## Security model
+The two mutation allowlists default to empty. An empty allowlist disables that mutation subclass rather than widening authority.
 
-- Write endpoints require an application API key.
-- The HighLevel private integration token stays server-side.
-- Clients do not receive direct CRM credentials.
-- Execute actions are audit logged.
-- The bridge is intentionally narrow rather than a generic proxy to the HighLevel API.
-- Secrets belong in the deployment environment or approved secret store, never in Git history.
+## Audit and proof
 
-## Audit logging
+Execute actions append JSON Lines to `AUDIT_LOG_PATH` containing the action, target ID, reason, before/requested/after state, HTTP statuses, verification state, and audit ID. Secret values are never written to the audit record.
 
-Execute actions are written as JSON Lines so they can be inspected or shipped to another log system:
+The operating rule is:
 
-```text
-/var/log/bridgeghl/audit.log
-```
+**pre-read → bounded mutation → post-read → verify → audit → resolve or escalate**.
 
-The operating expectation is **mutation + readback**, not “HTTP 200 therefore done.”
+A mutation that cannot be read back is **Needs Runtime Verification**, not complete.
 
-## Local / server operation
+## Deployment posture
 
-Environment configuration is documented in `.env.example`.
+Use one sub-account, one protected PIT, one bridge caller credential, and one narrow allowlist. Keep `LIVE_WRITE_ENABLED=false` until secret binding, location mapping, audit-path writability, and readback are verified in the deployed runtime.
 
-Typical service refresh:
-
-```bash
-git pull
-sudo systemctl restart bridgeghl
-sudo systemctl status bridgeghl --no-pager
-curl http://127.0.0.1:8000/health
-```
-
-Exact deployment details are intentionally environment-specific and are not evidence that a public production instance exists.
+See `docs/deployment-runbook.md` for the activation sequence.
 
 ## Design principles
 
-- **Purpose before automation.** A tool may execute a decision; it does not decide why the work matters.
-- **Minimum sufficient authority.** Expose only the mutations the workflow actually needs.
-- **Preview consequential changes.** Dry-run should make the proposed state transition inspectable.
-- **Evidence before completion.** Verify the resulting system state after an execute call.
-- **No secret sprawl.** Credentials stay outside prompts, tickets, public repositories, and client-side code.
-- **Fail closed.** Unknown fields, unsupported actions, or missing authorization should stop the write rather than broaden capability silently.
+- Purpose before automation.
+- Minimum sufficient authority.
+- No implicit authority expansion.
+- Reversible, attributable writes first.
+- Evidence before completion.
+- No secret sprawl.
+- Fail closed.
 
 ## Where this fits
 
-BridgeGHL is one supporting project in the broader [PQExpert.io](https://pqexpert.io/) technical portfolio. The interesting part is not “AI writes to a CRM.” The interesting part is the control boundary between reasoning, authorization, mutation, and proof.
-
-For public portfolio context, see [PQExpert.io](https://pqexpert.io/). For vulnerabilities or sensitive security findings, use the repository’s security guidance rather than opening an issue with secrets.
+BridgeGHL is a supporting project in the broader [PQExpert.io](https://pqexpert.io/) technical portfolio. The core design problem is not “AI writes to a CRM”; it is maintaining a trustworthy boundary between reasoning, delegated authority, mutation, rollback, and proof.
