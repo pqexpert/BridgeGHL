@@ -1,7 +1,25 @@
 services:
   bridgeghl:
     build: .
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     env_file:
       - .env
+    volumes:
+      - bridgeghl-audit:/var/log/bridgeghl
+
+  bridgeghl-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    expose:
+      - "8000"
+    environment:
+      BRIDGE_BASE_URL: http://bridgeghl:3000
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY}
+      BRIDGE_TIMEOUT_SECONDS: ${BRIDGE_TIMEOUT_SECONDS:-30}
+    depends_on:
+      - bridgeghl
+
+volumes:
+  bridgeghl-audit:
