@@ -28,3 +28,9 @@ Metrics never override the layers above them.
 ## Public standard
 
 The project should demonstrate service before status, evidence before hype, stewardship, fairness, privacy, resilience, restraint, and beneficial outcomes.
+
+## Fabric boundary — 2026-09-04
+
+BridgeGHL serves only the Income Accelerator and RSC Command Center lanes when a current envelope explicitly allows the requested CRM action. Dzokden Store Manager Ziji is prohibited from this bridge.
+
+Central Dispatch is an optional coordination transport, not a new CRM authority. An invoked specialist receives only the narrow `highlevel_governed_write` interface in addition to ticket/evidence tools. MCP failure, connector presence, or model acknowledgement never authorizes a write. Keep direct native read paths and the bridge's dry-run/readback/audit controls intact, fail closed on identity or allowlist uncertainty, and record one bounded Jira blocker instead of creating a shadow contact store or alternate credential path.
