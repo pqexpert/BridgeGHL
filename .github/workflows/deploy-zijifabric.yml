@@ -24,7 +24,7 @@ jobs:
       REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
       HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT }}
-      HIGHLEVEL_LOCATION_ID: ${{ secrets.RSC_COMMAND_CENTER_LOC }}
+      HIGHLEVEL_LOCATION_ID: ${{ secrets.HIGHLEVEL_LOC }}
     steps:
       - name: Validate protected inputs
         shell: bash
