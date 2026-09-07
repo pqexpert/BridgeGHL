@@ -48,6 +48,16 @@ jobs:
           from pathlib import Path
 
           raw = os.environ["SSH_PRIVATE_KEY"].strip()
+          if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
+              raw = raw[1:-1].strip()
+          if raw.startswith(("ssh-rsa ", "ssh-ed25519 ", "ecdsa-sha2-")):
+              raise SystemExit("SSH secret classification: PUBLIC_KEY_ONLY")
+          if raw.startswith("SHA256:"):
+              raise SystemExit("SSH secret classification: FINGERPRINT_ONLY")
+          if raw.startswith(("/", "~/", "./")):
+              raise SystemExit("SSH secret classification: FILE_PATH_ONLY")
+          if raw.startswith("{"):
+              raise SystemExit("SSH secret classification: JSON_NOT_PRIVATE_KEY")
           if "\\n" in raw:
               raw = raw.replace("\\n", "\n")
           if "PRIVATE KEY" not in raw:
