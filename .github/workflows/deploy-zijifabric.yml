@@ -56,6 +56,8 @@ jobs:
           test -n "$rollback"
           "${privilege[@]}" cp -p "$rollback" "$target"
           "${privilege[@]}" chown bridgeadmin:bridgeadmin "$target"
+          "${privilege[@]}" chmod 600 "$target"
+          "${privilege[@]}" restorecon -Fv "$target"
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
           "${privilege[@]}" systemctl start bridgeghl.service || {
             "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
