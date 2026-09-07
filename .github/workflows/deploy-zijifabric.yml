@@ -140,7 +140,31 @@ jobs:
           exit 1
           REMOTE
 
+      - name: Verify HighLevel provider authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(curl --silent --show-error --output provider-response.json --write-out '%{http_code}' \
+            --request GET "https://services.leadconnectorhq.com/opportunities/pipelines?locationId=${HIGHLEVEL_LOCATION_ID}" \
+            --header "Authorization: Bearer ${HIGHLEVEL_PIT}" \
+            --header "Accept: application/json" \
+            --header "Version: 2021-07-28")
+          echo "HighLevel provider HTTP status: $status"
+          if [[ "$status" != "200" ]]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              body = json.loads(Path("provider-response.json").read_text())
+              print({"statusCode": body.get("statusCode"), "message": body.get("message")})
+          except Exception:
+              print("Provider returned a non-JSON error body")
+          PY
+            exit 1
+          fi
+          rm -f provider-response.json
+
       - name: Remove runner secret material
         if: always()
         shell: bash
-        run: rm -f highlevel.pit highlevel.location ~/.ssh/bridgeghl
+        run: rm -f highlevel.pit highlevel.location provider-response.json ~/.ssh/bridgeghl
