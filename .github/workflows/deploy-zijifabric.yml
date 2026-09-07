@@ -150,7 +150,7 @@ jobs:
           for raw in Path(sys.argv[1]).read_text().splitlines():
               if raw and not raw.lstrip().startswith("#") and "=" in raw:
                   key, value = raw.split("=", 1)
-                  values[key.strip()] = value.strip().strip("'\\"")
+                  values[key.strip()] = value.strip().strip(chr(39)).strip(chr(34))
 
           health = json.loads(Path("/tmp/bridgeghl-health.json").read_text())
           checks = {item["name"]: item["ok"] for item in health.get("checks", [])}
