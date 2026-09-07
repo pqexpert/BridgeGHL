@@ -112,7 +112,15 @@ jobs:
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
           "${privilege[@]}" systemctl restart bridgeghl.service
           "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
-          curl --silent --show-error http://127.0.0.1:8000/health
+          for attempt in {1..15}; do
+            if curl --silent --show-error http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
+          "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
+          exit 1
           REMOTE
 
       - name: Remove runner secret material
