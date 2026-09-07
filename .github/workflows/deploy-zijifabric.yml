@@ -42,8 +42,26 @@ jobs:
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/bridgeghl
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          raw = os.environ["SSH_PRIVATE_KEY"].strip()
+          if "\\n" in raw:
+              raw = raw.replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              try:
+                  decoded = base64.b64decode(raw, validate=True).decode()
+              except Exception as exc:
+                  raise SystemExit("SSH key is neither PEM text nor valid base64") from exc
+              if "PRIVATE KEY" not in decoded:
+                  raise SystemExit("Decoded SSH material is not a private key")
+              raw = decoded.strip()
+          Path.home().joinpath(".ssh/bridgeghl").write_text(raw + "\n")
+          PY
           chmod 600 ~/.ssh/bridgeghl
+          ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           umask 077
           printf '%s' "$HIGHLEVEL_PIT" > highlevel.pit
