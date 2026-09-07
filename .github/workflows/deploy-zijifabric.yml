@@ -102,7 +102,7 @@ jobs:
           if not location or any(ch.isspace() for ch in location):
               raise SystemExit("replacement location has an invalid transport format")
           lines = target.read_text().splitlines()
-          out, pit_replaced, location_replaced = [], False, False
+          out, pit_replaced, location_replaced, writes_replaced = [], False, False, False
           for line in lines:
               if line.startswith("HIGHLEVEL_PIT="):
                   out.append("HIGHLEVEL_PIT=" + pit)
@@ -110,12 +110,17 @@ jobs:
               elif line.startswith("HIGHLEVEL_LOCATION_ID="):
                   out.append("HIGHLEVEL_LOCATION_ID=" + location)
                   location_replaced = True
+              elif line.startswith("LIVE_WRITE_ENABLED="):
+                  out.append("LIVE_WRITE_ENABLED=false")
+                  writes_replaced = True
               else:
                   out.append(line)
           if not pit_replaced:
               out.append("HIGHLEVEL_PIT=" + pit)
           if not location_replaced:
               out.append("HIGHLEVEL_LOCATION_ID=" + location)
+          if not writes_replaced:
+              out.append("LIVE_WRITE_ENABLED=false")
           target.write_text("\n".join(out) + "\n")
           os.chmod(target, 0o600)
           PY
