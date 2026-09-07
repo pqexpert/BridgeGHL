@@ -1,4 +1,4 @@
-name: Deploy protected runtime binding
+name: Recover BridgeGHL service
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-runtime-binding:
+  recover:
     runs-on: ubuntu-latest
     environment: zijifabric
     timeout-minutes: 10
@@ -23,121 +23,49 @@ jobs:
       REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
       REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
-      HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT }}
     steps:
-      - name: Validate exact protected inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          required=(REMOTE_HOST REMOTE_USER SSH_PRIVATE_KEY HIGHLEVEL_PIT)
-          for name in "${required[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Required zijifabric secret is missing for $name"
-              exit 1
-            fi
-          done
-
-      - name: Prepare encrypted transport
+      - name: Prepare SSH
         shell: bash
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
           python3 - <<'PY'
-          import base64
-          import os
+          import base64, os
           from pathlib import Path
-
           raw = os.environ["SSH_PRIVATE_KEY"].strip()
-          if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
-              raw = raw[1:-1].strip()
-          if raw.startswith(("ssh-rsa ", "ssh-ed25519 ", "ecdsa-sha2-")):
-              raise SystemExit("SSH secret classification: PUBLIC_KEY_ONLY")
-          if raw.startswith("SHA256:"):
-              raise SystemExit("SSH secret classification: FINGERPRINT_ONLY")
-          if raw.startswith(("/", "~/", "./")):
-              raise SystemExit("SSH secret classification: FILE_PATH_ONLY")
-          if raw.startswith("{"):
-              raise SystemExit("SSH secret classification: JSON_NOT_PRIVATE_KEY")
           if "\\n" in raw:
               raw = raw.replace("\\n", "\n")
-          begin = raw.find("-----BEGIN ")
-          if begin >= 0 and "PRIVATE KEY-----" in raw[begin:]:
-              end_marker_pos = raw.find("-----END ", begin)
-              end_line_pos = raw.find("-----", end_marker_pos + len("-----END "))
-              if end_marker_pos >= 0 and end_line_pos >= 0:
-                  raw = raw[begin:end_line_pos + 5]
           if "PRIVATE KEY" not in raw:
-              compact = "".join(raw.split())
-              try:
-                  decoded = base64.b64decode(compact, validate=True).decode()
-              except Exception as exc:
-                  raise SystemExit("SSH key is neither PEM text nor valid base64") from exc
-              if "PRIVATE KEY" not in decoded:
-                  raise SystemExit("Decoded SSH material is not a private key")
-              raw = decoded.strip()
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
           Path.home().joinpath(".ssh/bridgeghl").write_text(raw + "\n")
           PY
           chmod 600 ~/.ssh/bridgeghl
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          umask 077
-          printf '%s' "$HIGHLEVEL_PIT" > highlevel.pit
 
-      - name: Snapshot, bind PIT, restart, and verify
+      - name: Restore last known runtime binding and diagnose
         shell: bash
         run: |
           set -euo pipefail
-          remote_tmp="/tmp/bridgeghl.pit.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
-          scp -i ~/.ssh/bridgeghl highlevel.pit "${REMOTE_USER}@${REMOTE_HOST}:${remote_tmp}"
-          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "PIT_FILE='${remote_tmp}' bash -s" <<'REMOTE'
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" 'bash -s' <<'REMOTE'
           set -euo pipefail
           target=/home/bridgeadmin/apps/BridgeGHL/.env
-          stamp=$(date -u +%Y%m%dT%H%M%SZ)
           privilege=()
-          if [[ $(id -u) -ne 0 ]]; then
-            privilege=(sudo -n)
-          fi
-          test -s "$target"
-          test -s "$PIT_FILE"
-          "${privilege[@]}" cp -p "$target" "$target.rollback.$stamp"
-          "${privilege[@]}" python3 - "$target" "$PIT_FILE" <<'PY'
-          from pathlib import Path
-          import os
-          import sys
-
-          target = Path(sys.argv[1])
-          pit_file = Path(sys.argv[2])
-          pit = pit_file.read_text().strip()
-          if not pit:
-              raise SystemExit("replacement PIT is empty")
-
-          lines = target.read_text().splitlines()
-          output = []
-          replaced = False
-          for line in lines:
-              if line.startswith("HIGHLEVEL_PIT="):
-                  output.append("HIGHLEVEL_PIT=" + pit)
-                  replaced = True
-              else:
-                  output.append(line)
-          if not replaced:
-              output.append("HIGHLEVEL_PIT=" + pit)
-
-          temporary = target.with_suffix(".env.new")
-          temporary.write_text("\n".join(output) + "\n")
-          os.chmod(temporary, 0o600)
-          os.replace(temporary, target)
-          PY
+          if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
+          rollback=$(ls -1t "$target".rollback.* 2>/dev/null | head -n 1)
+          test -n "$rollback"
+          "${privilege[@]}" cp -p "$rollback" "$target"
           "${privilege[@]}" chown bridgeadmin:bridgeadmin "$target"
-          rm -f "$PIT_FILE"
-          "${privilege[@]}" install -d -m 750 -o bridgeadmin -g bridgeadmin /var/log/bridgeghl
-          "${privilege[@]}" systemctl restart bridgeghl.service
+          "${privilege[@]}" systemctl reset-failed bridgeghl.service
+          "${privilege[@]}" systemctl start bridgeghl.service || {
+            "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
+            "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
+            exit 1
+          }
           "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
           curl --fail --silent --show-error http://127.0.0.1:8000/health
           REMOTE
 
-      - name: Remove runner secret material
+      - name: Remove runner key
         if: always()
-        shell: bash
-        run: |
-          rm -f highlevel.pit ~/.ssh/bridgeghl
+        run: rm -f ~/.ssh/bridgeghl
