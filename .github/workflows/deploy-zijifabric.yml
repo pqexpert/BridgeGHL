@@ -130,6 +130,7 @@ jobs:
           "${privilege[@]}" restorecon -RF "$new_dir"
           "${privilege[@]}" sed -i 's|^EnvironmentFile=.*|EnvironmentFile=/etc/bridgeghl/bridgeghl.env|' "$unit"
           "${privilege[@]}" sed -i '/^[[:space:]]*Environment=LIVE_WRITE_ENABLED=/d' "$unit"
+          "${privilege[@]}" sed -i '/^EnvironmentFile=\/etc\/bridgeghl\/bridgeghl.env/a Environment=LIVE_WRITE_ENABLED=true' "$unit"
           "${privilege[@]}" restorecon -F "$unit"
           "${privilege[@]}" systemctl daemon-reload
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
