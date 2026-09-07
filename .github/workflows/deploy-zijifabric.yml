@@ -24,12 +24,13 @@ jobs:
       REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
       HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT }}
+      HIGHLEVEL_LOCATION_ID: ${{ secrets.RSC_COMMAND_CENTER_LOC }}
     steps:
       - name: Validate protected inputs
         shell: bash
         run: |
           set -euo pipefail
-          for name in REMOTE_HOST REMOTE_USER SSH_PRIVATE_KEY HIGHLEVEL_PIT; do
+          for name in REMOTE_HOST REMOTE_USER SSH_PRIVATE_KEY HIGHLEVEL_PIT HIGHLEVEL_LOCATION_ID; do
             test -n "${!name:-}" || { echo "::error::Missing $name"; exit 1; }
           done
 
@@ -53,14 +54,17 @@ jobs:
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           umask 077
           printf '%s' "$HIGHLEVEL_PIT" > highlevel.pit
+          printf '%s' "$HIGHLEVEL_LOCATION_ID" > highlevel.location
 
       - name: Migrate binding, restart, and verify
         shell: bash
         run: |
           set -euo pipefail
           remote_pit="/tmp/bridgeghl.pit.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          remote_location="/tmp/bridgeghl.location.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           scp -i ~/.ssh/bridgeghl highlevel.pit "${REMOTE_USER}@${REMOTE_HOST}:${remote_pit}"
-          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "PIT_FILE='${remote_pit}' bash -s" <<'REMOTE'
+          scp -i ~/.ssh/bridgeghl highlevel.location "${REMOTE_USER}@${REMOTE_HOST}:${remote_location}"
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "PIT_FILE='${remote_pit}' LOCATION_FILE='${remote_location}' bash -s" <<'REMOTE'
           set -euo pipefail
           old_env=/home/bridgeadmin/apps/BridgeGHL/.env
           new_dir=/etc/bridgeghl
@@ -74,6 +78,7 @@ jobs:
           if [[ -z "${source_env:-}" ]]; then source_env="$old_env"; fi
           test -s "$source_env"
           test -s "$PIT_FILE"
+          test -s "$LOCATION_FILE"
 
           "${privilege[@]}" install -d -m 700 -o root -g root "$new_dir"
           if [[ -f "$new_env" ]]; then
@@ -82,32 +87,40 @@ jobs:
           "${privilege[@]}" cp -a "$unit" "$unit.rollback.$stamp"
           "${privilege[@]}" install -m 600 -o root -g root "$source_env" "$new_env"
 
-          "${privilege[@]}" python3 - "$new_env" "$PIT_FILE" <<'PY'
+          "${privilege[@]}" python3 - "$new_env" "$PIT_FILE" "$LOCATION_FILE" <<'PY'
           from pathlib import Path
           import os, sys
-          target, pit_file = map(Path, sys.argv[1:])
+          target, pit_file, location_file = map(Path, sys.argv[1:])
           pit = pit_file.read_text().strip()
+          location = location_file.read_text().strip()
           if (pit.startswith("'") and pit.endswith("'")) or (pit.startswith('"') and pit.endswith('"')):
               pit = pit[1:-1].strip()
           if pit.lower().startswith("bearer "):
               pit = pit[7:].strip()
           if not pit or any(ch.isspace() for ch in pit):
               raise SystemExit("replacement PIT has an invalid transport format")
+          if not location or any(ch.isspace() for ch in location):
+              raise SystemExit("replacement location has an invalid transport format")
           lines = target.read_text().splitlines()
-          out, replaced = [], False
+          out, pit_replaced, location_replaced = [], False, False
           for line in lines:
               if line.startswith("HIGHLEVEL_PIT="):
                   out.append("HIGHLEVEL_PIT=" + pit)
-                  replaced = True
+                  pit_replaced = True
+              elif line.startswith("HIGHLEVEL_LOCATION_ID="):
+                  out.append("HIGHLEVEL_LOCATION_ID=" + location)
+                  location_replaced = True
               else:
                   out.append(line)
-          if not replaced:
+          if not pit_replaced:
               out.append("HIGHLEVEL_PIT=" + pit)
+          if not location_replaced:
+              out.append("HIGHLEVEL_LOCATION_ID=" + location)
           target.write_text("\n".join(out) + "\n")
           os.chmod(target, 0o600)
           PY
 
-          rm -f "$PIT_FILE"
+          rm -f "$PIT_FILE" "$LOCATION_FILE"
           "${privilege[@]}" chown root:root "$new_env"
           "${privilege[@]}" restorecon -RF "$new_dir"
           "${privilege[@]}" sed -i 's|^EnvironmentFile=.*|EnvironmentFile=/etc/bridgeghl/bridgeghl.env|' "$unit"
@@ -130,4 +143,4 @@ jobs:
       - name: Remove runner secret material
         if: always()
         shell: bash
-        run: rm -f highlevel.pit ~/.ssh/bridgeghl
+        run: rm -f highlevel.pit highlevel.location ~/.ssh/bridgeghl
