@@ -111,7 +111,7 @@ jobs:
                   out.append("HIGHLEVEL_LOCATION_ID=" + location)
                   location_replaced = True
               elif line.startswith("LIVE_WRITE_ENABLED="):
-                  out.append("LIVE_WRITE_ENABLED=false")
+                  out.append("LIVE_WRITE_ENABLED=true")
                   writes_replaced = True
               else:
                   out.append(line)
@@ -120,7 +120,7 @@ jobs:
           if not location_replaced:
               out.append("HIGHLEVEL_LOCATION_ID=" + location)
           if not writes_replaced:
-              out.append("LIVE_WRITE_ENABLED=false")
+              out.append("LIVE_WRITE_ENABLED=true")
           target.write_text("\n".join(out) + "\n")
           os.chmod(target, 0o600)
           PY
@@ -162,8 +162,8 @@ jobs:
           checks = {item["name"]: item["ok"] for item in health.get("checks", [])}
           required = ("bridge_api_key", "highlevel_pit", "highlevel_location_id",
                       "highlevel_base_url", "audit_log_path", "audit_log_writable")
-          if health.get("live_write_enabled") is not False:
-              raise SystemExit("live writes must remain disabled")
+          if health.get("live_write_enabled") is not True:
+              raise SystemExit("governed write capability is not enabled")
           if not all(checks.get(name) is True for name in required):
               raise SystemExit("runtime configuration or audit writability check failed")
 
@@ -206,7 +206,7 @@ jobs:
                   raise SystemExit("contact-tag dry-run was not accepted")
           print(json.dumps({
               "service_active": True,
-              "live_writes_disabled": True,
+              "governed_writes_enabled": True,
               "audit_writable": True,
               "opportunity_dry_run": "accepted",
               "contact_tag_dry_run": "accepted" if tags else "disabled_by_empty_allowlist",
