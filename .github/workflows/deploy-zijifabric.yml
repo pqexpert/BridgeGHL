@@ -58,6 +58,14 @@ jobs:
           "${privilege[@]}" chown bridgeadmin:bridgeadmin "$target"
           "${privilege[@]}" chmod 600 "$target"
           "${privilege[@]}" restorecon -Fv "$target"
+          echo "=== UNIT ==="
+          "${privilege[@]}" systemctl cat bridgeghl.service
+          echo "=== PATH ==="
+          "${privilege[@]}" namei -l "$target"
+          echo "=== SELINUX ==="
+          "${privilege[@]}" ls -ldZ /home /home/bridgeadmin /home/bridgeadmin/apps /home/bridgeadmin/apps/BridgeGHL "$target"
+          echo "=== ACL ==="
+          "${privilege[@]}" getfacl -p "$target" 2>/dev/null || true
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
           "${privilege[@]}" systemctl start bridgeghl.service || {
             "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
