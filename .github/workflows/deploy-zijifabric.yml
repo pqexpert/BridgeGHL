@@ -1,0 +1,99 @@
+name: Deploy protected runtime binding
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-zijifabric.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-runtime-binding:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 10
+    env:
+      REMOTE_HOST: ${{ secrets.IONOS_HOST || secrets.SSH_HOST || secrets.SERVER_IP }}
+      REMOTE_USER: ${{ secrets.IONOS_USER || secrets.SSH_USER || 'bridgeadmin' }}
+      SSH_PRIVATE_KEY: ${{ secrets.IONOS_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
+      BRIDGE_API_KEY: ${{ secrets.BRIDGE_API_KEY }}
+      HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT || secrets.GHL_PIT }}
+      HIGHLEVEL_LOCATION_ID: ${{ secrets.HIGHLEVEL_LOCATION_ID || secrets.GHL_LOCATION_ID }}
+      HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS: ${{ secrets.HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS }}
+      HIGHLEVEL_APPROVED_CONTACT_TAGS: ${{ secrets.HIGHLEVEL_APPROVED_CONTACT_TAGS }}
+      LIVE_WRITE_ENABLED: ${{ secrets.LIVE_WRITE_ENABLED || 'false' }}
+    steps:
+      - name: Validate protected inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(REMOTE_HOST REMOTE_USER SSH_PRIVATE_KEY BRIDGE_API_KEY HIGHLEVEL_PIT HIGHLEVEL_LOCATION_ID)
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Required zijifabric secret is missing for $name"
+              exit 1
+            fi
+          done
+
+      - name: Prepare encrypted transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/bridgeghl
+          chmod 600 ~/.ssh/bridgeghl
+          ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          umask 077
+          {
+            printf 'BRIDGE_API_KEY=%s\n' "$BRIDGE_API_KEY"
+            printf 'HIGHLEVEL_PIT=%s\n' "$HIGHLEVEL_PIT"
+            printf 'HIGHLEVEL_LOCATION_ID=%s\n' "$HIGHLEVEL_LOCATION_ID"
+            printf 'HIGHLEVEL_BASE_URL=%s\n' 'https://services.leadconnectorhq.com'
+            printf 'HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS=%s\n' "$HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS"
+            printf 'HIGHLEVEL_APPROVED_CONTACT_TAGS=%s\n' "$HIGHLEVEL_APPROVED_CONTACT_TAGS"
+            printf 'LIVE_WRITE_ENABLED=%s\n' "$LIVE_WRITE_ENABLED"
+            printf 'HEALTHCHECK_TIMEOUT_SECONDS=%s\n' '5'
+            printf 'PORT=%s\n' '8000'
+            printf 'AUDIT_LOG_PATH=%s\n' '/var/log/bridgeghl/audit.log'
+          } > runtime.env
+
+      - name: Snapshot, bind, restart, and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_tmp="/tmp/bridgeghl.env.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          scp -i ~/.ssh/bridgeghl runtime.env "${REMOTE_USER}@${REMOTE_HOST}:${remote_tmp}"
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "REMOTE_ENV='${remote_tmp}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          app_dir=/home/bridgeadmin/apps/BridgeGHL
+          target="$app_dir/.env"
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
+          privilege=()
+          if [[ $(id -u) -ne 0 ]]; then
+            privilege=(sudo -n)
+          fi
+          "${privilege[@]}" install -d -m 750 -o bridgeadmin -g bridgeadmin "$app_dir"
+          "${privilege[@]}" install -d -m 750 -o bridgeadmin -g bridgeadmin /var/log/bridgeghl
+          if [[ -f "$target" ]]; then
+            "${privilege[@]}" cp -p "$target" "$target.rollback.$stamp"
+          fi
+          "${privilege[@]}" install -m 600 -o bridgeadmin -g bridgeadmin "$REMOTE_ENV" "$target"
+          rm -f "$REMOTE_ENV"
+          "${privilege[@]}" systemctl restart bridgeghl.service
+          "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
+          curl --fail --silent --show-error http://127.0.0.1:8000/health
+          REMOTE
+
+      - name: Remove runner secret material
+        if: always()
+        shell: bash
+        run: |
+          rm -f runtime.env ~/.ssh/bridgeghl
