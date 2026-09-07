@@ -1,4 +1,4 @@
-name: Recover BridgeGHL service
+name: Deploy BridgeGHL protected runtime
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  recover:
+  deploy:
     runs-on: ubuntu-latest
     environment: zijifabric
     timeout-minutes: 10
@@ -23,8 +23,17 @@ jobs:
       REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
       REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT }}
     steps:
-      - name: Prepare SSH
+      - name: Validate protected inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in REMOTE_HOST REMOTE_USER SSH_PRIVATE_KEY HIGHLEVEL_PIT; do
+            test -n "${!name:-}" || { echo "::error::Missing $name"; exit 1; }
+          done
+
+      - name: Prepare encrypted transport
         shell: bash
         run: |
           set -euo pipefail
@@ -42,40 +51,71 @@ jobs:
           chmod 600 ~/.ssh/bridgeghl
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          umask 077
+          printf '%s' "$HIGHLEVEL_PIT" > highlevel.pit
 
-      - name: Restore last known runtime binding and diagnose
+      - name: Migrate binding, restart, and verify
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" 'bash -s' <<'REMOTE'
+          remote_pit="/tmp/bridgeghl.pit.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          scp -i ~/.ssh/bridgeghl highlevel.pit "${REMOTE_USER}@${REMOTE_HOST}:${remote_pit}"
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "PIT_FILE='${remote_pit}' bash -s" <<'REMOTE'
           set -euo pipefail
-          target=/home/bridgeadmin/apps/BridgeGHL/.env
+          old_env=/home/bridgeadmin/apps/BridgeGHL/.env
+          new_dir=/etc/bridgeghl
+          new_env=/etc/bridgeghl/bridgeghl.env
+          unit=/etc/systemd/system/bridgeghl.service
+          stamp=$(date -u +%Y%m%dT%H%M%SZ)
           privilege=()
           if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
-          rollback=$(ls -1t "$target".rollback.* 2>/dev/null | head -n 1)
-          test -n "$rollback"
-          "${privilege[@]}" cp -p "$rollback" "$target"
-          "${privilege[@]}" chown bridgeadmin:bridgeadmin "$target"
-          "${privilege[@]}" chmod 600 "$target"
-          "${privilege[@]}" restorecon -Fv "$target"
-          echo "=== UNIT ==="
-          "${privilege[@]}" systemctl cat bridgeghl.service
-          echo "=== PATH ==="
-          "${privilege[@]}" namei -l "$target"
-          echo "=== SELINUX ==="
-          "${privilege[@]}" ls -ldZ /home /home/bridgeadmin /home/bridgeadmin/apps /home/bridgeadmin/apps/BridgeGHL "$target"
-          echo "=== ACL ==="
-          "${privilege[@]}" getfacl -p "$target" 2>/dev/null || true
+
+          source_env=$(ls -1t "$old_env".rollback.* 2>/dev/null | head -n 1)
+          if [[ -z "${source_env:-}" ]]; then source_env="$old_env"; fi
+          test -s "$source_env"
+          test -s "$PIT_FILE"
+
+          "${privilege[@]}" install -d -m 700 -o root -g root "$new_dir"
+          if [[ -f "$new_env" ]]; then
+            "${privilege[@]}" cp -a "$new_env" "$new_env.rollback.$stamp"
+          fi
+          "${privilege[@]}" cp -a "$unit" "$unit.rollback.$stamp"
+          "${privilege[@]}" install -m 600 -o root -g root "$source_env" "$new_env"
+
+          "${privilege[@]}" python3 - "$new_env" "$PIT_FILE" <<'PY'
+          from pathlib import Path
+          import os, sys
+          target, pit_file = map(Path, sys.argv[1:])
+          pit = pit_file.read_text().strip()
+          if not pit:
+              raise SystemExit("replacement PIT is empty")
+          lines = target.read_text().splitlines()
+          out, replaced = [], False
+          for line in lines:
+              if line.startswith("HIGHLEVEL_PIT="):
+                  out.append("HIGHLEVEL_PIT=" + pit)
+                  replaced = True
+              else:
+                  out.append(line)
+          if not replaced:
+              out.append("HIGHLEVEL_PIT=" + pit)
+          target.write_text("\n".join(out) + "\n")
+          os.chmod(target, 0o600)
+          PY
+
+          rm -f "$PIT_FILE"
+          "${privilege[@]}" chown root:root "$new_env"
+          "${privilege[@]}" restorecon -RF "$new_dir"
+          "${privilege[@]}" sed -i 's|^EnvironmentFile=.*|EnvironmentFile=/etc/bridgeghl/bridgeghl.env|' "$unit"
+          "${privilege[@]}" restorecon -F "$unit"
+          "${privilege[@]}" systemctl daemon-reload
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
-          "${privilege[@]}" systemctl start bridgeghl.service || {
-            "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
-            "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
-            exit 1
-          }
+          "${privilege[@]}" systemctl restart bridgeghl.service
           "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
-          curl --fail --silent --show-error http://127.0.0.1:8000/health
+          curl --silent --show-error http://127.0.0.1:8000/health
           REMOTE
 
-      - name: Remove runner key
+      - name: Remove runner secret material
         if: always()
-        run: rm -f ~/.ssh/bridgeghl
+        shell: bash
+        run: rm -f highlevel.pit ~/.ssh/bridgeghl
