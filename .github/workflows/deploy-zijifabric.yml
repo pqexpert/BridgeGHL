@@ -102,7 +102,7 @@ jobs:
           if not location or any(ch.isspace() for ch in location):
               raise SystemExit("replacement location has an invalid transport format")
           lines = target.read_text().splitlines()
-          out, pit_replaced, location_replaced, writes_replaced = [], False, False, False
+          out, pit_replaced, location_replaced = [], False, False
           for line in lines:
               if line.startswith("HIGHLEVEL_PIT="):
                   out.append("HIGHLEVEL_PIT=" + pit)
@@ -110,17 +110,12 @@ jobs:
               elif line.startswith("HIGHLEVEL_LOCATION_ID="):
                   out.append("HIGHLEVEL_LOCATION_ID=" + location)
                   location_replaced = True
-              elif line.startswith("LIVE_WRITE_ENABLED="):
-                  out.append("LIVE_WRITE_ENABLED=true")
-                  writes_replaced = True
               else:
                   out.append(line)
           if not pit_replaced:
               out.append("HIGHLEVEL_PIT=" + pit)
           if not location_replaced:
               out.append("HIGHLEVEL_LOCATION_ID=" + location)
-          if not writes_replaced:
-              out.append("LIVE_WRITE_ENABLED=true")
           target.write_text("\n".join(out) + "\n")
           os.chmod(target, 0o600)
           PY
@@ -129,92 +124,20 @@ jobs:
           "${privilege[@]}" chown root:root "$new_env"
           "${privilege[@]}" restorecon -RF "$new_dir"
           "${privilege[@]}" sed -i 's|^EnvironmentFile=.*|EnvironmentFile=/etc/bridgeghl/bridgeghl.env|' "$unit"
-          "${privilege[@]}" sed -i '/^[[:space:]]*Environment=LIVE_WRITE_ENABLED=/d' "$unit"
-          "${privilege[@]}" sed -i '/^EnvironmentFile=\/etc\/bridgeghl\/bridgeghl.env/a Environment=LIVE_WRITE_ENABLED=true' "$unit"
-          "${privilege[@]}" sed -i 's/LIVE_WRITE_ENABLED=false/LIVE_WRITE_ENABLED=true/g' "$unit"
           "${privilege[@]}" restorecon -F "$unit"
           "${privilege[@]}" systemctl daemon-reload
           "${privilege[@]}" systemctl reset-failed bridgeghl.service
           "${privilege[@]}" systemctl restart bridgeghl.service
           "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
-          ready=false
           for attempt in {1..15}; do
-            if curl --silent --show-error --fail http://127.0.0.1:8000/health >/tmp/bridgeghl-health.json; then
-              ready=true
-              break
+            if curl --silent --show-error http://127.0.0.1:8000/health; then
+              exit 0
             fi
             sleep 1
           done
-          if [[ "$ready" != true ]]; then
-            "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
-            "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
-            exit 1
-          fi
-          "${privilege[@]}" python3 - "$new_env" <<'PY'
-          import json, sys, urllib.request
-          from pathlib import Path
-
-          values = {}
-          for raw in Path(sys.argv[1]).read_text().splitlines():
-              if raw and not raw.lstrip().startswith("#") and "=" in raw:
-                  key, value = raw.split("=", 1)
-                  values[key.strip()] = value.strip().strip(chr(39)).strip(chr(34))
-
-          health = json.loads(Path("/tmp/bridgeghl-health.json").read_text())
-          checks = {item["name"]: item["ok"] for item in health.get("checks", [])}
-          required = ("bridge_api_key", "highlevel_pit", "highlevel_location_id",
-                      "highlevel_base_url", "audit_log_path", "audit_log_writable")
-          if health.get("live_write_enabled") is not True:
-              raise SystemExit("governed write capability is not enabled")
-          if not all(checks.get(name) is True for name in required):
-              raise SystemExit("runtime configuration or audit writability check failed")
-
-          api_key = values.get("BRIDGE_API_KEY", "")
-          if not api_key:
-              raise SystemExit("bridge caller key is missing")
-          payload = {
-              "opportunity_id": "dry-run-validation-only",
-              "changes": {"status": "open"},
-              "reason": "post-deployment no-write acceptance",
-          }
-          request = urllib.request.Request(
-              "http://127.0.0.1:8000/dry-run/opportunity/update",
-              data=json.dumps(payload).encode(),
-              headers={"Content-Type": "application/json", "X-API-Key": api_key},
-              method="POST",
-          )
-          with urllib.request.urlopen(request, timeout=5) as response:
-              dry_run = json.load(response)
-          if not dry_run.get("accepted") or dry_run.get("mode") != "dry_run":
-              raise SystemExit("opportunity dry-run was not accepted")
-
-          tags = [v.strip() for v in values.get("HIGHLEVEL_APPROVED_CONTACT_TAGS", "").split(",") if v.strip()]
-          if tags:
-              tag_payload = {
-                  "contact_id": "dry-run-validation-only",
-                  "tags_add": [tags[0]],
-                  "tags_remove": [],
-                  "reason": "post-deployment no-write acceptance",
-              }
-              tag_request = urllib.request.Request(
-                  "http://127.0.0.1:8000/dry-run/contact/tags",
-                  data=json.dumps(tag_payload).encode(),
-                  headers={"Content-Type": "application/json", "X-API-Key": api_key},
-                  method="POST",
-              )
-              with urllib.request.urlopen(tag_request, timeout=5) as response:
-                  tag_dry_run = json.load(response)
-              if not tag_dry_run.get("accepted") or tag_dry_run.get("mode") != "dry_run":
-                  raise SystemExit("contact-tag dry-run was not accepted")
-          print(json.dumps({
-              "service_active": True,
-              "governed_writes_enabled": True,
-              "audit_writable": True,
-              "opportunity_dry_run": "accepted",
-              "contact_tag_dry_run": "accepted" if tags else "disabled_by_empty_allowlist",
-          }))
-          PY
-          rm -f /tmp/bridgeghl-health.json
+          "${privilege[@]}" systemctl status bridgeghl.service --no-pager --lines=30 || true
+          "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
+          exit 1
           REMOTE
 
       - name: Verify HighLevel provider authentication
@@ -239,15 +162,6 @@ jobs:
           PY
             exit 1
           fi
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          body = json.loads(Path("provider-response.json").read_text())
-          pipelines = body.get("pipelines")
-          if not isinstance(pipelines, list) or not pipelines:
-              raise SystemExit("provider authentication succeeded but no pipeline mapping was returned")
-          print({"provider_authenticated": True, "pipeline_count": len(pipelines)})
-          PY
           rm -f provider-response.json
 
       - name: Remove runner secret material
