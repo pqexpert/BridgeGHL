@@ -87,8 +87,12 @@ jobs:
           import os, sys
           target, pit_file = map(Path, sys.argv[1:])
           pit = pit_file.read_text().strip()
-          if not pit:
-              raise SystemExit("replacement PIT is empty")
+          if (pit.startswith("'") and pit.endswith("'")) or (pit.startswith('"') and pit.endswith('"')):
+              pit = pit[1:-1].strip()
+          if pit.lower().startswith("bearer "):
+              pit = pit[7:].strip()
+          if not pit or any(ch.isspace() for ch in pit):
+              raise SystemExit("replacement PIT has an invalid transport format")
           lines = target.read_text().splitlines()
           out, replaced = [], False
           for line in lines:
