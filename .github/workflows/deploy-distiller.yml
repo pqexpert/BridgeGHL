@@ -1,0 +1,67 @@
+name: Deploy private VPS Distiller
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/deploy-distiller.yml", "scripts/deploy_distiller.py"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/deploy-distiller.yml", "scripts/deploy_distiller.py"]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m py_compile scripts/deploy_distiller.py
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    concurrency:
+      group: bridgeghl-production
+      cancel-in-progress: false
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare existing SSH transport
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Retain the existing deployment's host discovery, not an independent pin.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+
+      - name: Install pinned private Distiller and verify inference recovery
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          MODEL_KEY: ${{ secrets.CODEX_ZIJIFABRIC_SERVICE_ACCOUNT_KEY }}
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+        run: python3 scripts/deploy_distiller.py
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
