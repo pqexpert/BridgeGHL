@@ -1,0 +1,108 @@
+name: Income binding diagnosis
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/diagnose-income.yml", "scripts/fabric_binding_probe.py", "scripts/diagnose_income.py", "tests/test_income_diagnostic.py"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/diagnose-income.yml", "scripts/fabric_binding_probe.py", "scripts/diagnose_income.py", "tests/test_income_diagnostic.py"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -p test_income_diagnostic.py
+
+  inspect:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    concurrency:
+      group: bridgeghl-production
+      cancel-in-progress: false
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare existing SSH transport
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Retain the existing deployment's host discovery, not an independent pin.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+
+      - name: Validate supplied provider bindings from the VPS
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          WORKSPACE_KEY: ${{ secrets.CHATGPT_WORKSPACE_KEY }}
+          INCOME_ID: ${{ secrets.INCOME_ACCELERATOR_API_AGT }}
+          INCOME_URL: ${{ secrets.INCOME_ACCELERATOR_API_URL }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          user, host = os.environ["REMOTE_USER"], os.environ["REMOTE_HOST"]
+          if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", user) or not re.fullmatch(r"[A-Za-z0-9.:-]+", host):
+              raise SystemExit("SSH target format invalid; values withheld")
+          config = {"workspace_key": os.environ["WORKSPACE_KEY"].strip(),
+                    "agents": {lane: {"id": os.environ[lane.upper() + "_ID"], "url": os.environ[lane.upper() + "_URL"]}
+                               for lane in ("income",)}}
+          payload = {"source": Path("scripts/fabric_binding_probe.py").read_text() + "\n" + Path("scripts/diagnose_income.py").read_text(), "config": config}
+          remote = "python3 -c 'import json,sys; p=json.load(sys.stdin); s={}; exec(compile(p[\"source\"], \"binding-probe\", \"exec\"), s); sys.exit(s[\"main\"](p[\"config\"]))'"
+          # Existing owner-approved SSH destination. Payload goes over encrypted stdin
+          # into process memory, never a credential file, argv value, log, or artifact.
+          command = ["ssh", "-i", str(Path.home()/".ssh/fabric-preflight"), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                     "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+                     "-o", "UserKnownHostsFile=" + str(Path.home()/".ssh/fabric-known-hosts"), user + "@" + host, remote]
+          try:
+              result = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, timeout=370)
+              # Only the fixed status schema is eligible for public CI output.
+              lines = [line for line in result.stdout.splitlines() if '"stage": "INCOME_BINDING_DIAGNOSTIC"' in line]
+              if len(lines) != 1:
+                  raise ValueError("missing result")
+              report = json.loads(lines[0])["results"]
+              if set(report) != {"stage","outcome","agent_identity"}:
+                  raise ValueError("invalid result")
+              if any(not isinstance(v,str) or not re.fullmatch(r"[a-z0-9_]{1,80}",v) for v in report.values()):
+                  raise ValueError("unsafe result")
+              print(json.dumps({"stage":"INCOME_BINDING_DIAGNOSTIC","results":report,"fabric_live":False},sort_keys=True))
+          except Exception:
+              raise SystemExit("VPS probe did not return a valid sanitized result; no automatic retry")
+          raise SystemExit(result.returncode)
+          PY
+
+      - name: Remove runner-only temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
