@@ -1,0 +1,112 @@
+name: Fabric VPS execution preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/fabric-vps-preflight.yml"]
+
+permissions:
+  contents: read
+
+# Serialize with the existing deployment; do not restart or alter its service.
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 5
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      WORKSPACE_AGENT_ACCESS_TOKEN: ${{ secrets.WORKSPACE_AGENT_ACCESS_TOKEN }}
+      WORKSPACE_AGENT_TRIGGER_INCOME: ${{ vars.WORKSPACE_AGENT_TRIGGER_INCOME }}
+      WORKSPACE_AGENT_TRIGGER_RSC: ${{ vars.WORKSPACE_AGENT_TRIGGER_RSC }}
+      WORKSPACE_AGENT_TRIGGER_STORE: ${{ vars.WORKSPACE_AGENT_TRIGGER_STORE }}
+    steps:
+      - name: Inspect protected binding presence without disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          names = ("REMOTE_HOST", "REMOTE_USER", "SSH_PRIVATE_KEY", "OPENAI_API_KEY", "WORKSPACE_AGENT_ACCESS_TOKEN")
+          print(json.dumps({"stage": "RUNNER_BINDINGS", "present": {n: bool(os.environ.get(n)) for n in names}, "values_disclosed": False}))
+          print(json.dumps({"stage": "TRIGGER_FORMAT_ONLY", "valid_format": {
+              lane: bool(re.fullmatch(r"agtch_[A-Za-z0-9_-]+", os.environ.get("WORKSPACE_AGENT_TRIGGER_" + lane.upper(), "")))
+              for lane in ("income", "rsc", "store")}, "agent_calls": 0}))
+          if not all(os.environ.get(n) for n in names[:3]):
+              raise SystemExit("Required existing SSH binding is absent; no remote action attempted")
+          PY
+
+      - name: Prepare existing SSH transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Same host-discovery mechanism as the existing deployment workflow.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+
+      - name: Verify authenticated host and inspect declared variable names only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/fabric-preflight \
+            -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/fabric-known-hosts \
+            "${REMOTE_USER}@${REMOTE_HOST}" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          printf '%s\n' '{"stage":"VPS_EXECUTION","authenticated_command":true,"domain_mutations":0}'
+          if [[ $(id -u) -eq 0 ]]; then privilege=(); else privilege=(sudo -n); fi
+          "${privilege[@]}" python3 - <<'PY'
+          import json, re, subprocess
+          from pathlib import Path
+          env_file = Path("/etc/bridgeghl/bridgeghl.env")
+          declared = set()
+          readable = False
+          try:
+              with env_file.open() as stream:
+                  for line in stream:
+                      # Keep only names. Never execute/source, return, or copy values.
+                      name, separator, _ = line.partition("=")
+                      name = name.strip()
+                      if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                          declared.add(name)
+              readable = True
+          except OSError:
+              pass
+          names = ("OPENAI_API_KEY", "WORKSPACE_AGENT_ACCESS_TOKEN", "WORKSPACE_AGENT_TRIGGER_INCOME", "WORKSPACE_AGENT_TRIGGER_RSC", "WORKSPACE_AGENT_TRIGGER_STORE")
+          active = subprocess.run(["systemctl", "is-active", "--quiet", "bridgeghl.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+          print(json.dumps({"stage": "HOST_BASELINE", "bridge_service_active": active,
+              "known_application_directory_present": Path("/home/bridgeadmin/apps/BridgeGHL/app.py").is_file(),
+              "known_environment_readable_for_names": readable,
+              "declared_names_in_known_environment": {n: n in declared for n in names},
+              "credential_validity": "NOT_TESTED", "agent_execution": "NOT_TESTED",
+              "fabric_deployment": "NOT_PERFORMED", "domain_mutations": 0}, sort_keys=True))
+          PY
+          REMOTE
+
+      - name: Remove runner-only temporary SSH material
+        if: always()
+        shell: bash
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
