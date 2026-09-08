@@ -2,50 +2,42 @@ name: Fabric VPS execution preflight
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/fabric-vps-preflight.yml", "scripts/fabric_binding_probe.py", "tests/test_fabric_binding_probe.py"]
   push:
     branches: [main]
-    paths: [".github/workflows/fabric-vps-preflight.yml"]
+    paths: [".github/workflows/fabric-vps-preflight.yml", "scripts/fabric_binding_probe.py", "tests/test_fabric_binding_probe.py"]
 
 permissions:
   contents: read
 
-# Serialize with the existing deployment; do not restart or alter its service.
-concurrency:
-  group: bridgeghl-production
-  cancel-in-progress: false
-
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -p test_fabric_binding_probe.py
+
   inspect:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
     runs-on: ubuntu-latest
     environment: zijifabric
-    timeout-minutes: 5
-    env:
-      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
-      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
-      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      WORKSPACE_AGENT_ACCESS_TOKEN: ${{ secrets.WORKSPACE_AGENT_ACCESS_TOKEN }}
-      WORKSPACE_AGENT_TRIGGER_INCOME: ${{ vars.WORKSPACE_AGENT_TRIGGER_INCOME }}
-      WORKSPACE_AGENT_TRIGGER_RSC: ${{ vars.WORKSPACE_AGENT_TRIGGER_RSC }}
-      WORKSPACE_AGENT_TRIGGER_STORE: ${{ vars.WORKSPACE_AGENT_TRIGGER_STORE }}
+    concurrency:
+      group: bridgeghl-production
+      cancel-in-progress: false
+    timeout-minutes: 7
     steps:
-      - name: Inspect protected binding presence without disclosure
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json, os, re
-          names = ("REMOTE_HOST", "REMOTE_USER", "SSH_PRIVATE_KEY", "OPENAI_API_KEY", "WORKSPACE_AGENT_ACCESS_TOKEN")
-          print(json.dumps({"stage": "RUNNER_BINDINGS", "present": {n: bool(os.environ.get(n)) for n in names}, "values_disclosed": False}))
-          print(json.dumps({"stage": "TRIGGER_FORMAT_ONLY", "valid_format": {
-              lane: bool(re.fullmatch(r"agtch_[A-Za-z0-9_-]+", os.environ.get("WORKSPACE_AGENT_TRIGGER_" + lane.upper(), "")))
-              for lane in ("income", "rsc", "store")}, "agent_calls": 0}))
-          if not all(os.environ.get(n) for n in names[:3]):
-              raise SystemExit("Required existing SSH binding is absent; no remote action attempted")
-          PY
-
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Prepare existing SSH transport
         shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
         run: |
           set -euo pipefail
           install -m 700 -d ~/.ssh
@@ -63,48 +55,63 @@ jobs:
               raise SystemExit("Existing SSH key could not be prepared; value withheld")
           PY
           ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
-          # Same host-discovery mechanism as the existing deployment workflow.
+          # Retain the existing deployment's host discovery, not an independent pin.
           ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
           test -s ~/.ssh/fabric-known-hosts
 
-      - name: Verify authenticated host and inspect declared variable names only
+      - name: Validate supplied provider bindings from the VPS
         shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          MODEL_KEY: ${{ secrets.CODEX_ZIJIFABRIC_SERVICE_ACCOUNT_KEY }}
+          WORKSPACE_KEY: ${{ secrets.CHATGPT_WORKSPACE_KEY }}
+          INCOME_ID: ${{ secrets.INCOME_ACCELERATOR_API_AGT }}
+          INCOME_URL: ${{ secrets.INCOME_ACCELERATOR_API_URL }}
+          RSC_ID: ${{ secrets.RSC_COMMAND_CENTER_API_AGT }}
+          RSC_URL: ${{ secrets.RSC_COMMAND_CENTER_API_URL }}
+          STORE_ID: ${{ secrets.DZOKDEN_STORE_MANAGER_AGT }}
+          STORE_URL: ${{ secrets.DZOKDEN_STORE_MANAGER_URL }}
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/fabric-preflight \
-            -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/fabric-known-hosts \
-            "${REMOTE_USER}@${REMOTE_HOST}" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          printf '%s\n' '{"stage":"VPS_EXECUTION","authenticated_command":true,"domain_mutations":0}'
-          if [[ $(id -u) -eq 0 ]]; then privilege=(); else privilege=(sudo -n); fi
-          "${privilege[@]}" python3 - <<'PY'
-          import json, re, subprocess
+          python3 - <<'PY'
+          import json, os, re, subprocess
           from pathlib import Path
-          env_file = Path("/etc/bridgeghl/bridgeghl.env")
-          declared = set()
-          readable = False
+          user, host = os.environ["REMOTE_USER"], os.environ["REMOTE_HOST"]
+          if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", user) or not re.fullmatch(r"[A-Za-z0-9.:-]+", host):
+              raise SystemExit("SSH target format invalid; values withheld")
+          config = {"model_key": os.environ["MODEL_KEY"].strip(), "workspace_key": os.environ["WORKSPACE_KEY"].strip(),
+                    "agents": {lane: {"id": os.environ[lane.upper() + "_ID"], "url": os.environ[lane.upper() + "_URL"]}
+                               for lane in ("income", "rsc", "store")}}
+          payload = {"source": Path("scripts/fabric_binding_probe.py").read_text(), "config": config}
+          remote = "python3 -c 'import json,sys; p=json.load(sys.stdin); s={}; exec(compile(p[\"source\"], \"binding-probe\", \"exec\"), s); sys.exit(s[\"main\"](p[\"config\"]))'"
+          # Existing owner-approved SSH destination. Payload goes over encrypted stdin
+          # into process memory, never a credential file, argv value, log, or artifact.
+          command = ["ssh", "-i", str(Path.home()/".ssh/fabric-preflight"), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+                     "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+                     "-o", "UserKnownHostsFile=" + str(Path.home()/".ssh/fabric-known-hosts"), user + "@" + host, remote]
           try:
-              with env_file.open() as stream:
-                  for line in stream:
-                      # Keep only names. Never execute/source, return, or copy values.
-                      name, separator, _ = line.partition("=")
-                      name = name.strip()
-                      if separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
-                          declared.add(name)
-              readable = True
-          except OSError:
-              pass
-          names = ("OPENAI_API_KEY", "WORKSPACE_AGENT_ACCESS_TOKEN", "WORKSPACE_AGENT_TRIGGER_INCOME", "WORKSPACE_AGENT_TRIGGER_RSC", "WORKSPACE_AGENT_TRIGGER_STORE")
-          active = subprocess.run(["systemctl", "is-active", "--quiet", "bridgeghl.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-          print(json.dumps({"stage": "HOST_BASELINE", "bridge_service_active": active,
-              "known_application_directory_present": Path("/home/bridgeadmin/apps/BridgeGHL/app.py").is_file(),
-              "known_environment_readable_for_names": readable,
-              "declared_names_in_known_environment": {n: n in declared for n in names},
-              "credential_validity": "NOT_TESTED", "agent_execution": "NOT_TESTED",
-              "fabric_deployment": "NOT_PERFORMED", "domain_mutations": 0}, sort_keys=True))
+              result = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, timeout=370)
+              # Only the fixed status schema is eligible for public CI output.
+              lines = [line for line in result.stdout.splitlines() if line.startswith('{"credential_values_disclosed":')]
+              if len(lines) != 1:
+                  raise ValueError("missing result")
+              report = json.loads(lines[0])
+              allowed = {"verified", "invocation_completed", "trigger_url_invalid", "trigger_id_url_mismatch", "trigger_id_invalid",
+                         "published_trigger_missing", "workspace_token_missing", "credential_missing_or_invalid_format",
+                         "model_response_invalid", "network_or_response_error", "accepted_status_or_run_id_invalid",
+                         "run_identity_mismatch", "agent_identity_mismatch", "run_failed", "run_suspended",
+                         "run_status_invalid", "run_pending_timeout_no_retrigger", "provider_not_allowed"}
+              results = report["results"]
+              if set(results) != {"model_auth", "income", "rsc", "store"}:
+                  raise ValueError("invalid result")
+              if any(v not in allowed and not re.fullmatch(r"http_[1-5][0-9]{2}", v) for v in results.values()):
+                  raise ValueError("unsafe result")
+              print(json.dumps({"stage":"PROVIDER_BINDING_PROBE", "results":results, "fabric_live":False}, sort_keys=True))
+          except Exception:
+              raise SystemExit("VPS probe did not return a valid sanitized result; no automatic retry")
+          raise SystemExit(result.returncode)
           PY
-          REMOTE
 
       - name: Remove runner-only temporary SSH material
         if: always()
