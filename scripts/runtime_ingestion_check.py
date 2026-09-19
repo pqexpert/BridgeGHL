@@ -13,9 +13,11 @@ result = {'configured': {k: bool(os.getenv(k)) for k in fields},
 if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
     from urllib.parse import urlencode
     result['provider_checks'] = []
+    result['token_has_outer_whitespace'] = os.environ['HIGHLEVEL_PIT'] != os.environ['HIGHLEVEL_PIT'].strip()
+    result['location_has_outer_whitespace'] = os.environ['HIGHLEVEL_LOCATION_ID'] != os.environ['HIGHLEVEL_LOCATION_ID'].strip()
     for version in ('v3', '2021-07-28'):
         request = Request('https://services.leadconnectorhq.com/opportunities/pipelines?' + urlencode({'locationId': os.environ['HIGHLEVEL_LOCATION_ID']}),
-            headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': version, 'Accept': 'application/json'})
+            headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': version, 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'BridgeGHL/0.4.0'})
         check = {'version': version}
         try:
             with urlopen(request, timeout=15) as response:
@@ -26,7 +28,10 @@ if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
             check['status'] = exc.code
             try:
                 error = json.load(exc)
-                message = str(error.get('message') or error.get('error') or error.get('error_description') or '')
+                check['error_keys'] = sorted(error) if isinstance(error, dict) else [type(error).__name__]
+                check['response_content_type'] = exc.headers.get('Content-Type', '')
+                check['response_server'] = exc.headers.get('Server', '')
+                message = str(error.get('message') or error.get('error') or error.get('error_description') or error.get('detail') or error.get('msg') or '')
                 for secret in (os.getenv('HIGHLEVEL_PIT'), os.getenv('HIGHLEVEL_LOCATION_ID')):
                     if secret: message = message.replace(secret, '[redacted]')
                 check['error_message'] = message[:200]
