@@ -12,13 +12,26 @@ result = {'configured': {k: bool(os.getenv(k)) for k in fields},
           'live_write_enabled': os.getenv('LIVE_WRITE_ENABLED', '').lower() in ('true', '1', 'yes', 'on')}
 if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
     from urllib.parse import urlencode
-    request = Request('https://services.leadconnectorhq.com/opportunities/pipelines?' + urlencode({'locationId': os.environ['HIGHLEVEL_LOCATION_ID']}),
-        headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': 'v3', 'Accept': 'application/json'})
-    try:
-        with urlopen(request, timeout=15) as response:
-            data = json.load(response)
-            result['provider_status'] = response.status
-            result['pipeline_count'] = len(data.get('pipelines', []))
-    except HTTPError as exc: result['provider_status'] = exc.code
-    except URLError: result['provider_status'] = 'transport_error'
+    result['provider_checks'] = []
+    for version in ('v3', '2021-07-28'):
+        request = Request('https://services.leadconnectorhq.com/opportunities/pipelines?' + urlencode({'locationId': os.environ['HIGHLEVEL_LOCATION_ID']}),
+            headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': version, 'Accept': 'application/json'})
+        check = {'version': version}
+        try:
+            with urlopen(request, timeout=15) as response:
+                data = json.load(response)
+                check['status'] = response.status
+                check['pipeline_count'] = len(data.get('pipelines', []))
+        except HTTPError as exc:
+            check['status'] = exc.code
+            try:
+                message = str(json.load(exc).get('message', ''))
+                check['scope_error'] = 'scope' in message.lower()
+                check['version_error'] = 'version' in message.lower()
+                check['token_error'] = 'token' in message.lower()
+            except Exception:
+                check['unparsed_error'] = True
+        except URLError:
+            check['status'] = 'transport_error'
+        result['provider_checks'].append(check)
 print(json.dumps(result, sort_keys=True))
