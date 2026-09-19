@@ -25,7 +25,11 @@ if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
         except HTTPError as exc:
             check['status'] = exc.code
             try:
-                message = str(json.load(exc).get('message', ''))
+                error = json.load(exc)
+                message = str(error.get('message') or error.get('error') or error.get('error_description') or '')
+                for secret in (os.getenv('HIGHLEVEL_PIT'), os.getenv('HIGHLEVEL_LOCATION_ID')):
+                    if secret: message = message.replace(secret, '[redacted]')
+                check['error_message'] = message[:200]
                 check['scope_error'] = 'scope' in message.lower()
                 check['version_error'] = 'version' in message.lower()
                 check['token_error'] = 'token' in message.lower()
