@@ -13,6 +13,7 @@ on:
       - scripts/bootstrap_career.py
       - scripts/transfer_career_source.py
       - scripts/configure_ecosystem.py
+      - scripts/project_career_fields.py
       - .github/workflows/deploy-ingestion.yml
 permissions:
   contents: read
@@ -61,7 +62,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           printf '%s' "$GITHUB_SHA" > DEPLOYED_SHA
-          tar -czf ingestion-release.tgz app.py ingestion.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py DEPLOYED_SHA
+          tar -czf ingestion-release.tgz app.py ingestion.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py DEPLOYED_SHA
           remote_package="/tmp/bridgeghl-source.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tgz"
           scp -i ~/.ssh/bridgeghl ingestion-release.tgz "${REMOTE_USER}@${REMOTE_HOST}:${remote_package}"
           ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "bash -s -- '$remote_package' '$GITHUB_SHA'" < scripts/deploy_ingestion.sh
@@ -79,6 +80,13 @@ jobs:
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
           SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
         run: python3 scripts/transfer_career_source.py
+      - name: Project source fields into verified career opportunities
+        if: contains(github.event.head_commit.message, '[career-fields]')
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" 'sudo -n systemd-run --quiet --wait --pipe --collect --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env /var/lib/bridgeghl/career-import/runner/bin/python /home/bridgeadmin/apps/BridgeGHL/scripts/project_career_fields.py --execute'
       - name: Clean up transport material
         if: always()
         run: rm -f ~/.ssh/bridgeghl ingestion-release.tgz DEPLOYED_SHA
