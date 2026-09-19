@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as bridge
 from ingestion import journal
@@ -36,9 +37,15 @@ def main():
             if db.execute('SELECT key FROM effects WHERE key=?', (key,)).fetchone():
                 raise RuntimeError('Ambiguous prior bootstrap effect; native reconciliation required')
             db.execute('INSERT INTO effects VALUES (?,?,?)', (key, 'pending', None)); db.commit()
-            create()
-            found = find()
-            if not found: raise RuntimeError('Bootstrap native readback failed')
+            created = create()
+            native = created.get('contact') or created.get('pipeline') or created
+            native_id = native.get('id')
+            db.execute('UPDATE effects SET native_id=? WHERE key=?',(native_id,key));db.commit()
+            for attempt in range(4):
+                found = find()
+                if found: break
+                time.sleep(2)
+            if not found: raise RuntimeError('Bootstrap native readback failed: '+key)
             db.execute('UPDATE effects SET state=?,native_id=? WHERE key=?', ('verified',found['id'],key));db.commit()
             return found
         def find_pipeline():
