@@ -726,3 +726,8 @@ def execute_contact_tags(
         verified=verification["ok"],
         verification=verification,
     )
+
+# Source imports are separately enabled and remain inside this bridge's boundary.
+import sys
+from ingestion import register_routes
+register_routes(sys.modules[__name__])
