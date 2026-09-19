@@ -20,6 +20,20 @@ def test_full_source_content_survives_chunking():
     assert len(bodies) > 1
 
 
+def test_export_includes_pursuit_pages_and_asset_links():
+    sid, report = 'a' * 32, 'b' * 32
+    bundle = {'schema_version':'career-drive-export/1',
+        'collections':{'assets':{'complete':True,'rows':[{'url':'https://app.notion.com/p/'+sid,'Asset Name':'Resume'}]}},
+        'current_pursuit_pages':[{'url':'https://app.notion.com/p/'+sid+'?pvs=204','text':'Full source'},
+                                 {'url':'https://app.notion.com/p/'+report,'title':'Pursuit report','text':'Both career routes'}],
+        'current_drive_assets':[{'id':'private-asset','title':'Resume'}]}
+    records=list(source_records(bundle,['assets']))
+    assert len(records)==2
+    assert records[0]['content']=='Full source'
+    assert records[1]['content']=='Both career routes'
+    assert records[1]['properties']['drive_assets']==bundle['current_drive_assets']
+
+
 def test_dzokden_domain_rejected():
     with pytest.raises(ValueError):
         ingestion.IngestRecord(domain='dzokden', source_id='s', source_url='x', title='x', kind='contact')

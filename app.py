@@ -187,6 +187,7 @@ def highlevel_headers(redacted: bool = False) -> dict:
         "Version": "v3",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "User-Agent": "BridgeGHL/0.4.0",
     }
 
 

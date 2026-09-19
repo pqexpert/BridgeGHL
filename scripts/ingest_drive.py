@@ -14,6 +14,9 @@ import requests
 def source_records(bundle, collections):
     if bundle.get('schema_version') != 'career-drive-export/1':
         raise ValueError('Unsupported export schema')
+    pages = {p['url'].split('?')[0].rstrip('/').split('/')[-1].replace('-', ''): p
+             for p in bundle.get('current_pursuit_pages', [])}
+    seen = set()
     for collection in collections:
         source = bundle['collections'][collection]
         if not source['complete']:
@@ -23,6 +26,7 @@ def source_records(bundle, collections):
             if not url.startswith('https://app.notion.com/p/'):
                 raise ValueError('Missing stable source page URL')
             sid = url.rstrip('/').split('/')[-1].replace('-', '')
+            seen.add(sid)
             if not re.fullmatch('[0-9a-f]{32}', sid):
                 raise ValueError('Invalid source ID')
             title = row.get('Company') or row.get('Name') or row.get('Asset Name') or row.get('Skill') or row.get('Recommendation') or sid
@@ -30,10 +34,17 @@ def source_records(bundle, collections):
                 title += ' — ' + row.get('Role', '')
             yield {'domain': 'income', 'source_id': sid, 'source_url': url,
                    'kind': 'opportunity' if collection == 'job_applications' else ('contact' if collection == 'relationships' else 'context'),
-                   'title': title[:500], 'properties': row,
+                   'title': title[:500], 'properties': row, 'content': pages.get(sid, {}).get('text', ''),
                    'contact_email': (row.get('Contact Email') if collection == 'job_applications' else row.get('Email') if collection == 'relationships' else None) or None,
                    'contact_name': (row.get('Contact Name') if collection == 'job_applications' else row.get('Name') if collection == 'relationships' else None) or None,
                    'company': (row.get('Company') or row.get('Organization')) if collection in ('job_applications', 'relationships') else None}
+    if 'assets' in collections:
+        for sid, page in pages.items():
+            if sid not in seen:
+                yield {'domain': 'income', 'source_id': sid, 'source_url': page['url'].split('?')[0],
+                       'kind': 'context', 'title': page.get('title', sid)[:500], 'content': page.get('text', ''),
+                       'properties': {'drive_assets': bundle.get('current_drive_assets', []),
+                                      'principal_direction': bundle.get('principal_direction')}}
 
 
 def load_bundle(args):
@@ -96,6 +107,8 @@ def main():
         if response.status_code != 200 or not (result.get('verified') if args.execute else result.get('accepted')):
             print(json.dumps({'state': 'BLOCKED', 'processed': len(receipts), 'total': len(records), 'http_status': response.status_code}))
             return 1
+        if len(receipts) % 25 == 0:
+            print(json.dumps({'state': 'PROGRESS', 'processed': len(receipts), 'total': len(records)}), flush=True)
     print(json.dumps({'state': 'VERIFIED' if args.execute else 'DRY_RUN', 'records': len(receipts)}))
     return 0
 
