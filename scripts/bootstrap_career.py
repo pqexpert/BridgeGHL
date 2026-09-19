@@ -37,8 +37,19 @@ def main():
         def effect(key, find, create):
             found = find()
             if found: return found
-            if db.execute('SELECT key FROM effects WHERE key=?', (key,)).fetchone():
-                raise RuntimeError('Ambiguous prior bootstrap effect; native reconciliation required')
+            prior=db.execute('SELECT state,native_id FROM effects WHERE key=?',(key,)).fetchone()
+            if prior:
+                # Run 35440984058 ended with a definitive HTTP 400 during context
+                # creation. Native search above has now reconciled absence. This
+                # narrowly scoped repair does not retry timeouts/unknown effects.
+                marker='reconciled-context-http400-35440984058'
+                reconciled=db.execute('SELECT key FROM effects WHERE key=?',(marker,)).fetchone()
+                if key=='income-context' and prior==('pending',None) and not reconciled:
+                    db.execute('INSERT INTO effects VALUES (?,?,?)',(marker,'rejected',None))
+                    db.execute('DELETE FROM effects WHERE key=?',(key,));db.commit()
+                    bridge.append_audit_log({'action':'career_bootstrap_reconcile','effect':key,'prior_provider_status':400,'native_matches':0})
+                else:
+                    raise RuntimeError('Ambiguous prior bootstrap effect: '+key)
             db.execute('INSERT INTO effects VALUES (?,?,?)', (key, 'pending', None)); db.commit()
             created = create()
             native = created.get('contact') or created.get('pipeline') or created
@@ -64,7 +75,8 @@ def main():
             if len(matches)>1: raise RuntimeError('Ambiguous context contact')
             return matches[0] if matches else None
         contact=effect('income-context',find_contact,lambda:call('POST','/contacts/',body={'locationId':bridge.HIGHLEVEL_LOCATION_ID,
-            'name':context_name,'dnd':True,'source':'BridgeGHL source context; not a recruiter or outreach recipient'}))
+            'firstName':'Income Accelerator','lastName':'Source Context','name':context_name,
+            'dnd':True,'source':'BridgeGHL source context - no outreach'}))
         actual=call('GET','/contacts/'+contact['id']).get('contact',{})
         if actual.get('locationId')!=bridge.HIGHLEVEL_LOCATION_ID: raise RuntimeError('Context location mismatch')
         stage=next(s for s in pipeline['stages'] if s['name']=='Source intake')
