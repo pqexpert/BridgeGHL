@@ -192,8 +192,8 @@ def main():
         for suffix in ('A', 'B'):
             title = 'TEST ONLY - Shared contact opportunity ' + suffix
             def find_opp(title=title):
-                return unique(call('GET', '/opportunities/search', params={'location_id': LOCATION,
-                              'pipeline_id': pipeline['id'], 'contact_id': cid, 'limit': 100}).get('opportunities', []), lambda x: x['name'] == title)
+                return unique(call('GET', '/opportunities/search', params={'locationId': LOCATION,
+                              'pipelineId': pipeline['id'], 'contactId': cid, 'limit': 100}).get('opportunities', []), lambda x: x['name'] == title)
             def verify_opp(x):
                 o = call('GET', '/opportunities/' + x['id'])['opportunity']
                 require(o.get('contactId') == cid and o.get('pipelineId') == pipeline['id'], 'Canary opportunity mismatch')
