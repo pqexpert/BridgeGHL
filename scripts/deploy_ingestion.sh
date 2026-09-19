@@ -12,7 +12,7 @@ cleanup() { rm -rf "$stage"; rm -f "$package"; }
 trap cleanup EXIT
 tar -xzf "$package" -C "$stage"
 test "$(cat "$stage/DEPLOYED_SHA")" = "$expected_sha"
-files=(app.py ingestion.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py DEPLOYED_SHA)
+files=(app.py ingestion.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py DEPLOYED_SHA)
 for file in "${files[@]}"; do
   test -f "$stage/$file"
   "${privilege[@]}" mkdir -p "$backup/$(dirname "$file")"
