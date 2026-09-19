@@ -30,6 +30,11 @@ jobs:
           python -m pip install -r requirements.txt pytest
           python -m pytest -q
           bash -n scripts/deploy_ingestion.sh
+      - name: Check current protected provider binding on runner
+        env:
+          HIGHLEVEL_PIT: ${{ secrets.HIGHLEVEL_PIT }}
+          HIGHLEVEL_LOCATION_ID: ${{ secrets.HIGHLEVEL_LOC }}
+        run: python3 scripts/runtime_ingestion_check.py
       - name: Deploy exact source using existing protected transport
         shell: bash
         env:
