@@ -8,6 +8,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as bridge
 from ingestion import journal
+import hashlib
 
 ROOT = Path('/var/lib/bridgeghl/career-import')
 
@@ -102,6 +103,18 @@ def main():
         stat=env.stat();os.chown(temp,stat.st_uid,stat.st_gid);os.chmod(temp,stat.st_mode & 0o777);os.replace(temp,env)
         (ROOT/'bindings.json').write_text(json.dumps(bindings));os.chmod(ROOT/'bindings.json',0o600)
         bridge.append_audit_log({'action':'career_bootstrap','result':'verified','pipeline_id':pipeline['id'],'contact_id':contact['id']})
+        receipt=ROOT/'receipt.json'
+        if receipt.exists():
+            entries=json.loads(receipt.read_text())
+            last=entries[-1] if entries else {}
+            detail=last.get('result',{}).get('detail',{})
+            if isinstance(detail,dict) and detail.get('provider_status') in (400,401,403,404,422):
+                key='opportunity:'+hashlib.sha256(('income:'+last['source_id']).encode()).hexdigest()[:32]
+                with journal(str(Path(bridge.AUDIT_LOG_PATH).parent/'ingestion.sqlite3')) as ledger:
+                    row=ledger.execute('SELECT state,native_id FROM effects WHERE key=?',(key,)).fetchone()
+                    if row==('pending',None):
+                        ledger.execute('UPDATE effects SET state=? WHERE key=?',('rejected',key));ledger.commit()
+                        bridge.append_audit_log({'action':'reconcile_rejected_ingest','source_key':key,'provider_status':detail['provider_status']})
         print(json.dumps({'career_destination':'verified','live_write_enabled':True}))
 
 if __name__=='__main__':
