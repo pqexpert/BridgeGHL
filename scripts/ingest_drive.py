@@ -82,6 +82,7 @@ def main():
     parser.add_argument('--source-id')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--receipt', required=True)
+    parser.add_argument('--resume', action='store_true', help='Resume this same checksum-pinned export from verified receipts')
     args = parser.parse_args()
     records = list(source_records(load_bundle(args), args.collections.split(',')))
     if args.source_id: records = [r for r in records if r['source_id'] == args.source_id.replace('-', '')]
@@ -91,10 +92,21 @@ def main():
     if u.scheme != 'https' and not (u.scheme == 'http' and u.hostname in ('127.0.0.1', 'localhost')):
         raise ValueError('Bridge URL requires HTTPS outside localhost')
     key = os.environ['BRIDGE_API_KEY']
-    receipts = []
     path = Path(args.receipt)
     path.parent.mkdir(parents=True, exist_ok=True)
+    receipts = []
+    if args.resume and args.execute and path.exists():
+        if path.with_suffix('.sha256').read_text().strip()!=args.sha256: raise ValueError('Receipt source checksum differs')
+        previous=json.loads(path.read_text())
+        allowed={r['source_id'] for r in records}
+        receipts=[r for r in previous if r.get('source_id') in allowed and r.get('http_status')==200 and r.get('result',{}).get('verified')]
+        if len({r['source_id'] for r in receipts})!=len(receipts): raise ValueError('Duplicate receipt entries')
+    completed={r['source_id'] for r in receipts}
+    path.with_suffix('.sha256').write_text(args.sha256)
+    os.chmod(path.with_suffix('.sha256'),0o600)
+    if completed: print(json.dumps({'state':'RESUMING','verified_records':len(completed),'total':len(records)}),flush=True)
     for record in records:
+        if record['source_id'] in completed: continue
         response = requests.post(base + '/dry-run/ingest/source-record', json=record, headers={'X-API-Key': key}, timeout=40)
         result = response.json()
         if response.status_code == 200 and result.get('accepted') and args.execute:
