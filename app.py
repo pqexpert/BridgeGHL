@@ -7,6 +7,7 @@ import os
 import uuid
 
 import requests
+import time
 
 app = FastAPI(title="BridgeGHL", version="0.4.0")
 
@@ -212,6 +213,11 @@ def highlevel_request(
         params=params,
         timeout=timeout,
     )
+    # A transient provider read rejection must not replay a mutation.
+    if method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
+        time.sleep(2)
+        response = requests.request(method, url, headers=highlevel_headers(),
+                                    json=body, params=params, timeout=timeout)
     try:
         data = response.json()
     except ValueError:

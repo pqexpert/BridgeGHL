@@ -5,6 +5,15 @@ source_dir="$1"
 app_dir=/home/bridgeadmin/apps/BridgeGHL
 root=/var/lib/bridgeghl/career-import
 sudo -n install -d -m 700 "$root"
+sudo -n python3 - "$root" "$source_dir/control.json" <<'PY'
+import hashlib,json,os,sys
+from pathlib import Path
+root=Path(sys.argv[1]); expected=json.load(open(sys.argv[2]))['sha256']
+if (root/'receipt.json').exists():
+    if hashlib.sha256((root/'source.json').read_bytes()).hexdigest()!=expected:
+        raise SystemExit('Refusing receipt reuse for a different source export')
+    (root/'receipt.sha256').write_text(expected);os.chmod(root/'receipt.sha256',0o600)
+PY
 sudo -n install -m 600 "$source_dir/source.json" "$source_dir/control.json" "$root/"
 sudo -n install -m 644 "$source_dir/bootstrap_career.py" "$app_dir/scripts/bootstrap_career.py"
 rm -rf "$source_dir"
@@ -29,4 +38,4 @@ sudo -n systemd-run --quiet --wait --pipe --collect \
   "$python_path" "$app_dir/scripts/ingest_drive.py" --file "$root/source.json" --sha256 "$sha" --receipt "$root/dry-run.json"
 sudo -n systemd-run --quiet --wait --pipe --collect \
   --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env \
-  "$python_path" "$app_dir/scripts/ingest_drive.py" --file "$root/source.json" --sha256 "$sha" --receipt "$root/receipt.json" --execute
+  "$python_path" "$app_dir/scripts/ingest_drive.py" --file "$root/source.json" --sha256 "$sha" --receipt "$root/receipt.json" --execute --resume
