@@ -72,10 +72,12 @@ def persist(name, value):
     os.replace(tmp, path)
 
 
-def ensure(db, key, find, create, verify):
+def ensure(db, key, find, create, verify, read_id=None):
     """Reconcile native state first; never replay a write with uncertain effects."""
     found = find()
     previous = db.execute('SELECT state,native_id FROM effects WHERE key=?', (key,)).fetchone()
+    if not found and previous and previous[1] and read_id:
+        found = read_id(previous[1])
     if found:
         verify(found)
         db.execute('INSERT OR REPLACE INTO effects VALUES (?,?,?)', (key, 'verified', found['id']))
@@ -92,7 +94,7 @@ def ensure(db, key, find, create, verify):
     db.execute('UPDATE effects SET native_id=? WHERE key=?', (created['id'], key))
     db.commit()
     for attempt in range(3):
-        found = find()
+        found = read_id(created['id']) if read_id else find()
         if found:
             break
         time.sleep(1)
@@ -172,15 +174,17 @@ def main():
         def find_canary():
             return unique(call('POST', '/contacts/search', body={'locationId': LOCATION, 'query': canary_name,
                           'page': 1, 'pageLimit': 100}).get('contacts', []),
-                          lambda x: (x.get('contactName') or x.get('name') or '').lower() == canary_name.lower())
+                          lambda x: (x.get('contactName') or x.get('name') or ' '.join(filter(None, [x.get('firstName'), x.get('lastName')]))).lower() == canary_name.lower())
         def verify_canary(x):
             c = call('GET', '/contacts/' + x['id'])['contact']
             require(c.get('locationId') == LOCATION and c.get('dnd') is True and not c.get('email') and not c.get('phone'), 'Canary isolation mismatch')
+            require((c.get('name') or c.get('contactName') or ' '.join(filter(None, [c.get('firstName'), c.get('lastName')]))).lower() == canary_name.lower(), 'Canary name mismatch')
         contact = ensure(db, 'canary:contact', find_canary, lambda: call('POST', '/contacts/', body={
             'locationId': LOCATION, 'firstName': 'TEST ONLY - BridgeGHL', 'lastName': 'Ecosystem Canary',
             'name': canary_name, 'source': 'BridgeGHL test - no outreach', 'dnd': True,
             'tags': ['mode:test', 'bridgeghl:managed'],
-            'customFields': [{'id': receipt['fields']['contact:Ecosystem Record Mode'], 'field_value': 'test'}]})['contact'], verify_canary)
+            'customFields': [{'id': receipt['fields']['contact:Ecosystem Record Mode'], 'field_value': 'test'}]})['contact'], verify_canary,
+            lambda cid: call('GET', '/contacts/' + cid)['contact'])
         cid = contact['id']
         receipt['canary']['contact_id'] = cid
         pipeline = receipt['pipelines']['TEST ONLY - BridgeGHL Validation']
@@ -196,7 +200,8 @@ def main():
             op = ensure(db, 'canary:opportunity:' + suffix, find_opp, lambda title=title: call('POST', '/opportunities/', body={
                 'locationId': LOCATION, 'pipelineId': pipeline['id'], 'pipelineStageId': pipeline['stages'][0]['id'],
                 'contactId': cid, 'name': title, 'status': 'open', 'monetaryValue': 0,
-                'customFields': [{'id': receipt['fields']['opportunity:Ecosystem Record Mode'], 'field_value': 'test'}]})['opportunity'], verify_opp)
+                'customFields': [{'id': receipt['fields']['opportunity:Ecosystem Record Mode'], 'field_value': 'test'}]})['opportunity'], verify_opp,
+                lambda oid: call('GET', '/opportunities/' + oid)['opportunity'])
             opportunity_ids.append(op['id'])
         require(len(set(opportunity_ids)) == 2, 'Shared-parent canary did not produce distinct opportunities')
         receipt['canary']['opportunity_ids'] = opportunity_ids

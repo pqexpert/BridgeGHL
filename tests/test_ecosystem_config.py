@@ -30,3 +30,16 @@ def test_uncertain_write_is_not_replayed(monkeypatch):
 def test_duplicate_native_identity_blocks():
     with pytest.raises(RuntimeError, match='Ambiguous'):
         config.unique([{'id': 'a'}, {'id': 'b'}], lambda x: True)
+
+
+def test_native_id_recovers_pending_contact_without_search_visibility(monkeypatch):
+    db = sqlite3.connect(':memory:')
+    db.execute('CREATE TABLE effects (key TEXT PRIMARY KEY,state TEXT,native_id TEXT)')
+    db.execute('INSERT INTO effects VALUES (?,?,?)', ('canary', 'pending', 'native1'))
+    monkeypatch.setattr(config.bridge, 'append_audit_log', lambda x: None)
+    def forbidden_create():
+        pytest.fail('A successful but not yet searchable record must not be recreated')
+    result = config.ensure(db, 'canary', lambda: None, forbidden_create,
+                           lambda x: config.require(x['id'] == 'native1', 'Wrong identity'),
+                           lambda native_id: {'id': native_id})
+    assert result['id'] == 'native1'
