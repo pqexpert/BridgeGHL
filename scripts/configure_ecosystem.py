@@ -200,7 +200,7 @@ def main():
             op = ensure(db, 'canary:opportunity:' + suffix, find_opp, lambda title=title: call('POST', '/opportunities/', body={
                 'locationId': LOCATION, 'pipelineId': pipeline['id'], 'pipelineStageId': pipeline['stages'][0]['id'],
                 'contactId': cid, 'name': title, 'status': 'open', 'monetaryValue': 0,
-                'customFields': [{'id': receipt['fields']['opportunity:Ecosystem Record Mode'], 'field_value': 'test'}]})['opportunity'], verify_opp,
+                'customFields': [{'id': receipt['fields']['opportunity:Ecosystem Record Mode'], 'fieldValue': 'test'}]})['opportunity'], verify_opp,
                 lambda oid: call('GET', '/opportunities/' + oid)['opportunity'])
             opportunity_ids.append(op['id'])
         require(len(set(opportunity_ids)) == 2, 'Shared-parent canary did not produce distinct opportunities')

@@ -69,6 +69,19 @@ def main():
                       'scope': 'fill empty ecosystem fields only', 'native_stage_owner_changes': False}), flush=True)
     if not args.execute:
         return
+    # Prove the v3 custom-field update shape on synthetic opportunities first.
+    test_field = setup['fields']['opportunity:Ecosystem Record Mode']
+    for test_id in setup['canary']['opportunity_ids']:
+        test_path = '/opportunities/' + test_id
+        test_native = config.call('GET', test_path)['opportunity']
+        config.require(test_native.get('locationId') == config.LOCATION
+                       and test_native.get('name', '').startswith('TEST ONLY - ')
+                       and test_native.get('contactId') == setup['canary']['contact_id'], 'Test identity mismatch')
+        if existing_values(test_native).get(test_field) != 'test':
+            config.bridge.append_audit_log({'action': VERSION, 'opportunity_id': test_id, 'result': 'test_intent'})
+            config.call('PUT', test_path, body={'customFields': [{'id': test_field, 'fieldValue': 'test'}]})
+        config.require(existing_values(config.call('GET', test_path)['opportunity']).get(test_field) == 'test',
+                       'Custom-field test readback failed; real records untouched')
     result = {'version': VERSION, 'source_sha256': SOURCE_SHA, 'location_id': config.LOCATION, 'records': []}
     with journal(str(config.ROOT / 'projection.sqlite3')) as db:
         for record in records:
