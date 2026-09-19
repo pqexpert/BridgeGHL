@@ -9,6 +9,9 @@ on:
       - scripts/ingest_drive.py
       - scripts/deploy_ingestion.sh
       - scripts/runtime_ingestion_check.py
+      - scripts/run_career_import.sh
+      - scripts/bootstrap_career.py
+      - scripts/transfer_career_source.py
       - .github/workflows/deploy-ingestion.yml
 permissions:
   contents: read
