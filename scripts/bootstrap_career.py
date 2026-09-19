@@ -14,7 +14,10 @@ ROOT = Path('/var/lib/bridgeghl/career-import')
 def call(method, path, **kwargs):
     status, data = bridge.highlevel_request(method, bridge.HIGHLEVEL_BASE_URL.rstrip('/') + path, **kwargs)
     if not 200 <= status < 300:
-        raise RuntimeError('provider_status=' + str(status))
+        message=str(data.get('message') or data.get('error') or data.get('detail') or '')
+        for secret in (bridge.HIGHLEVEL_PIT,bridge.HIGHLEVEL_LOCATION_ID):
+            if secret: message=message.replace(secret,'[redacted]')
+        raise RuntimeError(method+' '+path+' provider_status='+str(status)+' '+message[:100])
     return data
 
 def main():
@@ -56,7 +59,7 @@ def main():
             'locationId':bridge.HIGHLEVEL_LOCATION_ID,'name':pipeline_name,'showInFunnel':False,'showInPieChart':False,
             'stages':[{'name':name,'position':i,'showInFunnel':False} for i,name in enumerate(plan['stages'])]}))
         def find_contact():
-            data=call('GET','/contacts/',params={'locationId':bridge.HIGHLEVEL_LOCATION_ID,'query':context_name,'limit':100})
+            data=call('POST','/contacts/search',body={'locationId':bridge.HIGHLEVEL_LOCATION_ID,'query':context_name,'page':1,'pageLimit':100})
             matches=[c for c in data.get('contacts',[]) if (c.get('contactName') or c.get('name') or ' '.join(filter(None,[c.get('firstName'),c.get('lastName')]))).lower()==context_name.lower()]
             if len(matches)>1: raise RuntimeError('Ambiguous context contact')
             return matches[0] if matches else None
