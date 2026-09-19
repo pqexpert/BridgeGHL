@@ -105,7 +105,9 @@ def main():
         fd = os.open(str(path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
         with os.fdopen(fd, 'w') as f: json.dump(receipts, f, indent=2)
         if response.status_code != 200 or not (result.get('verified') if args.execute else result.get('accepted')):
-            print(json.dumps({'state': 'BLOCKED', 'processed': len(receipts), 'total': len(records), 'http_status': response.status_code}))
+            detail=result.get('detail',{})
+            safe={k:detail[k] for k in ('error','provider_status','operation','resource','reason_category','bridge_state') if isinstance(detail,dict) and k in detail}
+            print(json.dumps({'state': 'BLOCKED', 'processed': len(receipts), 'total': len(records), 'http_status': response.status_code,'detail':safe}))
             return 1
         if len(receipts) % 25 == 0:
             print(json.dumps({'state': 'PROGRESS', 'processed': len(receipts), 'total': len(records)}), flush=True)

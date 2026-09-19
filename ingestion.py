@@ -76,7 +76,10 @@ def register_routes(bridge):
         except Exception:
             raise HTTPException(502, 'Provider transport failed; inspect native state before retry')
         if not 200 <= status < 300:
-            raise HTTPException(502, {'error': 'provider_rejected', 'provider_status': status})
+            message=str(data.get('message') or data.get('error') or data.get('detail') or '').lower()
+            kind=next((k for k in ('duplicate','scope','version','required','invalid','not found','limit') if k in message),'other')
+            raise HTTPException(502, {'error': 'provider_rejected', 'provider_status': status,
+                'operation':method, 'resource':path.split('/')[1], 'reason_category':kind})
         return data
 
     def check_contact(cid):
@@ -95,11 +98,16 @@ def register_routes(bridge):
             db.execute('INSERT OR REPLACE INTO effects VALUES (?,?,?)', (key, 'verified', existing))
             db.commit()
             return existing
-        if prior:
+        if prior and prior[0] != 'rejected':
             raise HTTPException(409, 'Prior effect is absent or ambiguous; refusing duplicate creation')
-        db.execute('INSERT INTO effects VALUES (?,?,?)', (key, 'pending', None))
+        db.execute('INSERT OR REPLACE INTO effects VALUES (?,?,?)', (key, 'pending', None))
         db.commit()  # Persist intent BEFORE provider mutation, including crash/timeout cases.
-        native_id = create()
+        try:
+            native_id = create()
+        except HTTPException as exc:
+            if isinstance(exc.detail,dict) and exc.detail.get('provider_status') in (400,401,403,404,422):
+                db.execute('UPDATE effects SET state=? WHERE key=?',('rejected',key));db.commit()
+            raise
         db.execute('UPDATE effects SET native_id=? WHERE key=?', (native_id, key))
         db.commit()
         verify(native_id)

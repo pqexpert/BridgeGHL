@@ -59,8 +59,10 @@ def test_disabled_ingestion_never_calls_provider(monkeypatch):
     assert exc.value.status_code == 409
 
 
-def test_replay_reads_native_note_and_does_not_create_twice(monkeypatch, tmp_path):
+@pytest.mark.parametrize('reject_first', [False, True])
+def test_replay_reads_native_note_and_does_not_create_twice(monkeypatch, tmp_path, reject_first):
     routes, notes, audits = {}, {}, []
+    attempts = []
     monkeypatch.setenv('HIGHLEVEL_INGEST_ENABLED', 'true')
     monkeypatch.setenv('HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID', 'contact1')
     def provider(method, url, **kw):
@@ -68,6 +70,8 @@ def test_replay_reads_native_note_and_does_not_create_twice(monkeypatch, tmp_pat
         if path == '/contacts/contact1': return 200, {'contact': {'id': 'contact1', 'locationId': 'loc'}}
         if path == '/contacts/contact1/notes' and method == 'GET': return 200, {'notes': list(notes.values())}
         if path == '/contacts/contact1/notes' and method == 'POST':
+            attempts.append(1)
+            if reject_first and len(attempts)==1: return 400, {'message':'Invalid request'}
             nid = str(len(notes) + 1)
             notes[nid] = {'id': nid, **kw['body']}
             return 201, {'note': notes[nid]}
@@ -79,6 +83,8 @@ def test_replay_reads_native_note_and_does_not_create_twice(monkeypatch, tmp_pat
         bridge_health_snapshot=lambda: SimpleNamespace(state='HEALTHY'))
     ingestion.register_routes(bridge)
     execute = routes['/execute/ingest/source-record']
+    if reject_first:
+        with pytest.raises(HTTPException): execute(record(), 'key')
     assert execute(record(), 'key')['verified']
     assert execute(record(), 'key')['verified']
     assert len(notes) == 1
