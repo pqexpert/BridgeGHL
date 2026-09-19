@@ -34,10 +34,15 @@ def main():
     os.chmod(ROOT / 'bootstrap-dry-run.json', 0o600)
     bridge.append_audit_log({'action': 'career_bootstrap', 'result': 'intent', **plan})
     with journal(str(ROOT / 'bootstrap.sqlite3')) as db:
-        def effect(key, find, create):
+        def effect(key, find, create, read_id=None):
             found = find()
             if found: return found
             prior=db.execute('SELECT state,native_id FROM effects WHERE key=?',(key,)).fetchone()
+            if prior and prior[1] and read_id:
+                found=read_id(prior[1])
+                if found:
+                    db.execute('UPDATE effects SET state=? WHERE key=?',('verified',key));db.commit()
+                    return found
             if prior:
                 # Run 35440984058 ended with a definitive HTTP 400 during context
                 # creation. Native search above has now reconciled absence. This
@@ -56,7 +61,7 @@ def main():
             native_id = native.get('id')
             db.execute('UPDATE effects SET native_id=? WHERE key=?',(native_id,key));db.commit()
             for attempt in range(4):
-                found = find()
+                found = read_id(native_id) if native_id and read_id else find()
                 if found: break
                 time.sleep(2)
             if not found: raise RuntimeError('Bootstrap native readback failed: '+key)
@@ -74,9 +79,15 @@ def main():
             matches=[c for c in data.get('contacts',[]) if (c.get('contactName') or c.get('name') or ' '.join(filter(None,[c.get('firstName'),c.get('lastName')]))).lower()==context_name.lower()]
             if len(matches)>1: raise RuntimeError('Ambiguous context contact')
             return matches[0] if matches else None
+        def read_context(cid):
+            c=call('GET','/contacts/'+cid).get('contact',{})
+            name=c.get('contactName') or c.get('name') or ' '.join(filter(None,[c.get('firstName'),c.get('lastName')]))
+            if c.get('locationId')!=bridge.HIGHLEVEL_LOCATION_ID or name.lower()!=context_name.lower():
+                raise RuntimeError('Context identity mismatch')
+            return c
         contact=effect('income-context',find_contact,lambda:call('POST','/contacts/',body={'locationId':bridge.HIGHLEVEL_LOCATION_ID,
             'firstName':'Income Accelerator','lastName':'Source Context','name':context_name,
-            'dnd':True,'source':'BridgeGHL source context - no outreach'}))
+            'dnd':True,'source':'BridgeGHL source context - no outreach'}),read_context)
         actual=call('GET','/contacts/'+contact['id']).get('contact',{})
         if actual.get('locationId')!=bridge.HIGHLEVEL_LOCATION_ID: raise RuntimeError('Context location mismatch')
         stage=next(s for s in pipeline['stages'] if s['name']=='Source intake')
