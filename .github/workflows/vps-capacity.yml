@@ -1,0 +1,74 @@
+name: Inspect IONOS VPS capacity and BridgeGHL routing
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/vps-capacity.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 5
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+    steps:
+      - name: Inspect live capacity and effective route without reading environment values
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh/bridgeghl-capacity"
+          p.write_text(raw + "\n")
+          p.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/bridgeghl-capacity >/dev/null
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/bridgeghl-capacity -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, shutil, subprocess
+          from pathlib import Path
+          def run(*args):
+              p = subprocess.run(args, capture_output=True, text=True, timeout=10)
+              return p.stdout.strip() if p.returncode == 0 else ""
+          mem = {}
+          for line in Path("/proc/meminfo").read_text().splitlines():
+              if ":" in line:
+                  name, value = line.split(":", 1)
+                  if name in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                      mem[name] = int(value.strip().split()[0]) // 1024
+          disk = shutil.disk_usage("/")
+          cpu = os.cpu_count()
+          active = run("systemctl", "is-active", "bridgeghl.service")
+          enabled = run("systemctl", "is-enabled", "bridgeghl.service")
+          configured_env = subprocess.run(["sudo", "-n", "test", "-f", "/etc/bridgeghl/bridgeghl.env"], capture_output=True).returncode == 0
+          nginx = run("systemctl", "is-active", "nginx")
+          from urllib.request import urlopen
+          try:
+              with urlopen("http://127.0.0.1:8000/health", timeout=5) as r:
+                  health = json.load(r).get("state", "unknown")
+          except Exception:
+              health = "unreachable"
+          print(json.dumps({"cpu_count":cpu,"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
+          PY
+          REMOTE
+      - name: Remove SSH material
+        if: always()
+        run: rm -f ~/.ssh/bridgeghl-capacity
