@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
 
 
 SERVER = MCPServer("BridgeGHL governed CRM")
@@ -36,13 +37,13 @@ def _call(path: str, payload: dict | None = None) -> dict:
         return {"ok": False, "error": "bridge_unavailable"}
 
 
-@SERVER.tool()
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
 def bridge_health() -> dict:
     """Read the live BridgeGHL health and HighLevel readback state."""
     return _call("/health")
 
 
-@SERVER.tool()
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
 def dry_run_opportunity_update(
     opportunity_id: str,
     reason: str,
@@ -74,7 +75,7 @@ def execute_opportunity_update(
     })
 
 
-@SERVER.tool()
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
 def dry_run_contact_tags(contact_id: str, reason: str, tags_add: list[str], tags_remove: list[str]) -> dict:
     """Validate allowlisted contact tag changes without mutation."""
     return _call("/dry-run/contact/tags", {
