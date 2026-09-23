@@ -19,7 +19,9 @@ The existing `MCP for Fabric Use` tool `highlevel_governed_write` routes to the 
 2. Create/repoint the ChatGPT custom app to the new MCP endpoint, review its tools, publish/refresh the tool snapshot, and invoke `bridge_health` through that actual ChatGPT app. Record the app binding and health result in this repository without tokens.
 3. Remove the old Base44 Fabric MCP app/tool binding from ChatGPT, then retire the legacy Base44 `HIGHLEVEL_PIT` secret after confirming no other live consumer. An old tool invocation returning 401 means this cleanup remains open. Keep any unrelated Base44 tools separately inventoried before retiring the entire app.
 
-ChatGPT app administration and OpenAI Platform tunnel control are not exposed through the connected tools in this environment; a private, healthy VPS endpoint alone does not complete these steps.
+On 2026-09-23, the cloud browser authenticated to Josh Allen's Workspace (Business) and the Restoration Platform organization. The Platform Tunnels screen has two preexisting workspace-associated tunnels, `openaitunnelforworkspace` and `vscodetun`. A separate `bridgeghl-ionos-rsc` tunnel was prepared in the Create form with Restoration organization and Josh Allen's Workspace selected, but **Create was not submitted**. No runtime client or ChatGPT app is linked yet.
+
+The GitHub `zijifabric` environment reportedly has an OpenAI admin key, but that key is for management and must **not** be used by the persistent `tunnel-client` service. Its runtime needs a separate restricted Platform API key with Tunnels Read + Use, scoped to the intended tunnel, stored as a protected GitHub environment secret and provisioned to the VPS with root-only permissions. Never print either key in workflow logs. The OpenAI [permissions guide](https://github.com/openai/tunnel-client/blob/master/docs/permissions.md) distinguishes these credentials. Once the dedicated tunnel and runtime key exist, deploy `tunnel-client` as a separate systemd service connecting to `http://127.0.0.1:8001/mcp`, verify `doctor` and readiness, then scan the app tools in ChatGPT.
 
 ## Mailgun and HighLevel
 
