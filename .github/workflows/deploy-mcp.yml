@@ -62,7 +62,10 @@ jobs:
           if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
           test -s "$source_file"
           "${privilege[@]}" test -s /etc/bridgeghl/bridgeghl.env
-          "${privilege[@]}" python3 -m venv /opt/bridgeghl-mcp
+          if ! command -v python3.11 >/dev/null; then
+            "${privilege[@]}" dnf -y install python3.11 python3.11-pip
+          fi
+          "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp
           "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check 'mcp==2.2.0'
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
             "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$app_dir/mcp_server.py.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
