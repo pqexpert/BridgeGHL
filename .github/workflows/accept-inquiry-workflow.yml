@@ -1,9 +1,6 @@
 name: Verify inquiry workflow acceptance
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [".github/workflows/accept-inquiry-workflow.yml"]
 permissions:
   contents: read
 concurrency:
