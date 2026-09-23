@@ -59,8 +59,21 @@ jobs:
               directory = Path('/var/lib/rsc-ops')
               directory.mkdir(mode=0o700, parents=True, exist_ok=True)
               directory.chmod(0o700)
+              def probe(args):
+                  completed = subprocess.run(args, capture_output=True, text=True, timeout=20)
+                  return completed.returncode, completed.stdout.strip()
+              _, enforcement = probe(['getenforce'])
+              _, unit = probe(['systemctl', 'show', 'nginx', '-p', 'MainPID', '-p', 'ExecStart', '-p', 'ExecReload', '-p', 'FragmentPath'])
+              _, journal = probe(['journalctl', '-u', 'nginx', '--since', '2026-09-23 19:00:00 UTC', '--no-pager', '-o', 'cat'])
+              # Retain only bind/reload diagnostics, never request logs or environment.
+              diagnostic_lines = [line for line in journal.splitlines() if ('bind()' in line or 'Reload failed' in line or 'Failed to reload' in line)][-30:]
+              preview_denied = any('18081' in line and ('Permission denied' in line or '13:' in line) for line in diagnostic_lines)
+              _, sockets = probe(['ss', '-ltnp'])
+              runtime_evidence = dict(selinux=enforcement, nginx_unit=unit, bind_errors=diagnostic_lines, listening_sockets=sockets)
+              print('preview_bind_permission_denied=' + str(preview_denied).lower())
+              print('selinux_enforcing=' + str(enforcement == 'Enforcing').lower())
               report = dict(observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), records=records,
-                            scope='nginx route directives only; no environment, credentials, headers or customer data')
+                            runtime_evidence=runtime_evidence, scope='nginx routes, service paths and bind diagnostics; no environment, credentials, headers or request data')
               fd, name = tempfile.mkstemp(dir=directory, prefix='.inventory-')
               with os.fdopen(fd, 'w') as stream:
                   json.dump(report, stream, indent=2)
