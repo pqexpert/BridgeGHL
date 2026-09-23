@@ -1,9 +1,6 @@
 name: Bind governed CRM operational fields
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [".github/workflows/configure-agent-fields.yml"]
 permissions:
   contents: read
 concurrency:
