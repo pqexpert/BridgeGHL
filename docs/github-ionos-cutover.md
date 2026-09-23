@@ -35,7 +35,7 @@ Health and dry-run tool annotations now explicitly identify read-only/non-destru
 
 Candidate sending subdomain: **mg.restoration-mt.com**, using the existing owned-domain context; verify provider reservation and authorized DNS-account control before activation. Public DNS readback on 2026-09-23 found no TXT/MX answers at that name. Root MX remains Proton; root DMARC is p=quarantine. Preserve root MX/SPF/DMARC and ordinary person-to-person mail. mail.restoration-mt.com has an existing route and is not the clean candidate.
 
-First inspect the actual RSC location's **Settings -> Email Services** provider and domain status. The supplied UI context identifies LeadConnector Email System without a dedicated domain, but the direct CRM connector returned contacts instead of the requested email settings and did not verify current configuration. Do not treat that response as email-provider evidence or broaden customer-data queries.
+Authenticated native RSC Settings -> Email Services now confirms **LeadConnector Email System**, with shared domain `send.lcmsgsndr.com`. The `mg.restoration-mt.com` Add & Verify flow generated the records below. The direct CRM connector had returned contacts instead of email settings; that response was not used as configuration evidence.
 
 ### Preferred path if LC Email is still active
 Use its existing **Dedicated Domain and IP -> Add Domain** flow for the sending subdomain. Record the exact DNS values the provider issues, add only the required subdomain records in the authoritative DNS account, then verify in HighLevel. A separate Mailgun account/API key is not a prerequisite for this LC Email flow. Do not buy a dedicated IP, add a subscription or migrate providers merely to complete a checklist.
@@ -48,7 +48,7 @@ Confirm SPF/DKIM and DMARC alignment, sender/reply-to identity, return-path and 
 
 Sending-domain verification is separate from mailbox hosting, Google/Gmail sync, CRM authority and campaign activation. HighLevel remains the relationship/action layer; GitHub/Notion/Jira retain their existing knowledge/evidence roles.
 
-**Current state:** no sending domain, provider or DNS mutation performed; no email sent. Authorized native Email Services and DNS administration remain needed. [HighLevel LC Email setup](https://help.gohighlevel.com/support/solutions/articles/48001226115-dedicated-email-sending-domains-overview-setup) and [Mailgun domain verification](https://help.mailgun.com/hc/en-us/articles/32884702360603-Domain-Verification-Setup-Guide) explain the distinct routes. Track activation in issue 31.
+**Current state:** LC Email setup for `mg.restoration-mt.com` has advanced to Apply and Verify; all six provider records show **Not Verified**. No DNS write or email send is proved. Cloudflare auto-configuration identified the provider; authorization completion was not verified. The dedicated Cloudflare tab reached a site-served security verification page. Preserve root Proton records; finish DNS authentication and verification before enabling outreach. [HighLevel LC Email setup](https://help.gohighlevel.com/support/solutions/articles/48001226115-dedicated-email-sending-domains-overview-setup) and [Mailgun domain verification](https://help.mailgun.com/hc/en-us/articles/32884702360603-Domain-Verification-Setup-Guide) explain the distinct routes. Track activation in issue 31.
 
 ## Other migration work
 
@@ -68,3 +68,18 @@ GitHub owns source, deployment workflows and protected deployment configuration;
 ## Reusable recovery learning
 
 [Wise Action Governor 2026-09-23.1](https://github.com/pqexpert/FungibleRD-MVP/blob/main/skills/wise-action-governor/SKILL.md) now routes recovery workers to the deployment/connector procedure. [Today's receipt](https://github.com/pqexpert/FungibleRD-MVP/blob/main/docs/learnings/BRIDGEGHL-RECOVERY-2026-09-23.md) preserves verified results, failed approaches and adoption debt under RBO-75. This source update does not assert all installed skills or hosted actors consumed it.
+
+### Provider-issued DNS records — 2026-09-23
+
+Hostnames below are relative to `restoration-mt.com`; these are public DNS values, not private credentials. They are recorded from the native Apply and Verify page and are **not yet deployed**.
+
+| Type | Host | Priority | Value |
+| --- | --- | --- | --- |
+| TXT | mg | — | `v=spf1 include:spf.leadconnectorhq.com include:mailgun.org ~all` |
+| TXT | pic._domainkey.mg | — | `k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC6n/DUfqJWhZWvMbEb0P11xcX3QMxQvG4C0S4YpCAz4Deqd2QRQbCnwUfJj4ubcoF/JYQwtjkbEVkOpMTRaps5AHPR0qCukIwf02kKkTfgJNCsxNLGDAl4a3B9Uou+i5bfUfhYy1TheSB7FyhsbX9TtJ5Mis0HyqU6rLpLbW6krQIDAQAB` |
+| CNAME | email.mg | — | `mailgun.org` |
+| MX | mg | 10 | `mxa.mailgun.org` |
+| MX | mg | 10 | `mxb.mailgun.org` |
+| TXT | _dmarc.mg | — | `v=DMARC1;p=none;` |
+
+The provider's subdomain DMARC recommendation is monitoring-only and would override inherited root quarantine at that subdomain. It has **not** been applied; choose an aligned enforcement policy explicitly before activation. Root DMARC remains unchanged.
