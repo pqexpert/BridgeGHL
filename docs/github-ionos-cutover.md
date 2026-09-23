@@ -31,16 +31,24 @@ Health and dry-run tool annotations now explicitly identify read-only/non-destru
 - No synthetic paid actor cycles were launched to manufacture adoption evidence. Next useful receipts must identify actual route consumption.
 - The old shared `MCP for Fabric Use` app still exists and exposes other tools; global disconnection and legacy Base44 PIT retirement remain open pending consumer inventory. Its historical invalid-PIT 401 is not the new IONOS route's health.
 
-## Mailgun and HighLevel
+## Mailgun / LC Email and HighLevel
 
-Use `mg.restoration-mt.com` as a candidate **dedicated sending subdomain**, subject to confirmation that the domain belongs to this organization and is not already reserved in Mailgun. DNS currently has no records for that name. The root `restoration-mt.com` receives mail through Proton; do not replace its MX/SPF to set up Mailgun. `mail.restoration-mt.com` has an existing proxied A record and is not the clean candidate.
+Candidate sending subdomain: **mg.restoration-mt.com**, using the existing owned-domain context; verify provider reservation and authorized DNS-account control before activation. Public DNS readback on 2026-09-23 found no TXT/MX answers at that name. Root MX remains Proton; root DMARC is p=quarantine. Preserve root MX/SPF/DMARC and ordinary person-to-person mail. mail.restoration-mt.com has an existing route and is not the clean candidate.
 
-1. In Mailgun, create a **US-region** sending domain for `mg.restoration-mt.com`. Copy its exact domain-specific SPF, DKIM, tracking CNAME, and (if receiving is enabled) MX records into Cloudflare DNS. Keep tracking host DNS-only where Mailgun requires it. Verify the domain in Mailgun and send a test.
-2. Obtain the Mailgun private API key through the Mailgun account and store it only in the appropriate protected credential store; it is **not** a BridgeGHL or HighLevel PIT.
-3. In the intended HighLevel agency/subaccount, configure Email Services > SMTP Service with the Mailgun private API key and verified US Mailgun domain, activate the provider, and test outbound delivery and reply handling. Agency-wide defaults and subaccount overrides have different precedence; verify the intended RSC location explicitly.
-4. Record the verified DNS, sending status, and HighLevel test results here without key values.
+First inspect the actual RSC location's **Settings -> Email Services** provider and domain status. The supplied UI context identifies LeadConnector Email System without a dedicated domain, but the direct CRM connector returned contacts instead of the requested email settings and did not verify current configuration. Do not treat that response as email-provider evidence or broaden customer-data queries.
 
-No Mailgun, Cloudflare DNS write, or HighLevel email-settings administration is exposed by the currently connected tools. These steps remain open; do not claim mail is connected or adjust the root Proton mail routing.
+### Preferred path if LC Email is still active
+Use its existing **Dedicated Domain and IP -> Add Domain** flow for the sending subdomain. Record the exact DNS values the provider issues, add only the required subdomain records in the authoritative DNS account, then verify in HighLevel. A separate Mailgun account/API key is not a prerequisite for this LC Email flow. Do not buy a dedicated IP, add a subscription or migrate providers merely to complete a checklist.
+
+### Alternative if a separate Mailgun provider is selected
+Verify the intended account/region and HighLevel-supported integration, create/verify the dedicated sending domain there, and connect it through the applicable HighLevel provider settings. Keep Mailgun transport credentials separate from the HighLevel PIT and tunnel runtime key. Never invent DKIM selectors, tracking targets or SPF values; use that provider's native records.
+
+### Acceptance before real outreach
+Confirm SPF/DKIM and DMARC alignment, sender/reply-to identity, return-path and tracking behavior. Use one approved test recipient and read back delivery/bounce and reply handling; do not send to real CRM audiences as an infrastructure test. Preserve native DND and exclusions. Relationship class (business/career/academic/personal/test-system), provenance/confidence and outreach authority must be explicit; absent authority means **none**. Existing namespaced fields and pipelines in the ecosystem plan should be mapped rather than duplicated. Ingestion never implies permission to contact.
+
+Sending-domain verification is separate from mailbox hosting, Google/Gmail sync, CRM authority and campaign activation. HighLevel remains the relationship/action layer; GitHub/Notion/Jira retain their existing knowledge/evidence roles.
+
+**Current state:** no sending domain, provider or DNS mutation performed; no email sent. Authorized native Email Services and DNS administration remain needed. [HighLevel LC Email setup](https://help.gohighlevel.com/support/solutions/articles/48001226115-dedicated-email-sending-domains-overview-setup) and [Mailgun domain verification](https://help.mailgun.com/hc/en-us/articles/32884702360603-Domain-Verification-Setup-Guide) explain the distinct routes. Track activation in issue 31.
 
 ## Other migration work
 
@@ -56,3 +64,7 @@ No Mailgun, Cloudflare DNS write, or HighLevel email-settings administration is 
 
 GitHub owns source, deployment workflows and protected deployment configuration; IONOS runs persistent services. ChatGPT remains the actor/tool invocation surface. A GitHub environment is repository-scoped: a same-named environment in another repository does not automatically share secret values. Keep provider secrets with the service that consumes them, not in all actor repositories. The local actor bootstrap pointers resolve this runbook; these source edits do not prove that hosted actors consumed the changes.
 
+
+## Reusable recovery learning
+
+[Wise Action Governor 2026-09-23.1](https://github.com/pqexpert/FungibleRD-MVP/blob/main/skills/wise-action-governor/SKILL.md) now routes recovery workers to the deployment/connector procedure. [Today's receipt](https://github.com/pqexpert/FungibleRD-MVP/blob/main/docs/learnings/BRIDGEGHL-RECOVERY-2026-09-23.md) preserves verified results, failed approaches and adoption debt under RBO-75. This source update does not assert all installed skills or hosted actors consumed it.
