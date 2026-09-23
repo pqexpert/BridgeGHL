@@ -118,18 +118,18 @@ jobs:
                 --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridge_health","arguments":{}}}' \
                 http://127.0.0.1:8001/mcp)
               printf '%s' "$health" | python3 -c '
-import json, sys
-def healthy(v):
-    if isinstance(v, dict):
-        return v.get("state") == "HEALTHY" or any(healthy(item) for item in v.values())
-    if isinstance(v, list):
-        return any(healthy(item) for item in v)
-    if isinstance(v, str) and v.startswith("{"):
-        try: return healthy(json.loads(v))
-        except ValueError: return False
-    return False
-assert healthy(json.load(sys.stdin))
-'
+          import json, sys
+          def healthy(v):
+              if isinstance(v, dict):
+                  return v.get("state") == "HEALTHY" or any(healthy(item) for item in v.values())
+              if isinstance(v, list):
+                  return any(healthy(item) for item in v)
+              if isinstance(v, str) and v.startswith("{"):
+                  try: return healthy(json.loads(v))
+                  except ValueError: return False
+              return False
+          assert healthy(json.load(sys.stdin))
+          '
               echo "loopback_mcp_health_verified=true"
               exit 0
             fi
