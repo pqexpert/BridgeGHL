@@ -1,0 +1,129 @@
+name: Deploy private IONOS tunnel
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/deploy-tunnel.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-tunnel-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 10
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      CONTROL_PLANE_API_KEY: ${{ secrets.OPENAI_TUNNEL_RUNTIME_KEY }}
+    steps:
+      - name: Validate protected inputs and download pinned client
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PY'
+          import base64, os, re
+          from pathlib import Path
+          for name in ("REMOTE_HOST", "REMOTE_USER", "SSH_PRIVATE_KEY", "CONTROL_PLANE_API_KEY"):
+              if not os.environ.get(name, "").strip():
+                  raise SystemExit("Missing protected input: " + name)
+          key = os.environ["CONTROL_PLANE_API_KEY"].strip()
+          if not re.fullmatch(r"sk-[A-Za-z0-9_-]+", key) or key.startswith("sk-admin"):
+              raise SystemExit("Expected restricted runtime API key; refusing invalid/admin key")
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh"
+          p.mkdir(mode=0o700, exist_ok=True)
+          (p / "bridgeghl-tunnel").write_text(raw + "\n")
+          (p / "bridgeghl-tunnel").chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/bridgeghl-tunnel >/dev/null
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            https://github.com/openai/tunnel-client/releases/download/v0.0.14/tunnel-client-v0.0.14-linux-amd64.zip -o tunnel.zip
+          echo '15bd17e805cad39d412199115bb9e10a978dd35258a114cdf25dd2ae6681c7d3  tunnel.zip' | sha256sum --check
+          unzip -q tunnel.zip -d tunnel-release
+          chmod 755 tunnel-release/tunnel-client tunnel-release/cloudflared
+          tunnel-release/tunnel-client --version
+      - name: Install isolated service and restricted credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          target="$REMOTE_USER@$REMOTE_HOST"
+          remote_stage=$(ssh -i ~/.ssh/bridgeghl-tunnel "$target" 'mktemp -d /tmp/bridgeghl-tunnel.XXXXXXXX')
+          [[ "$remote_stage" =~ ^/tmp/bridgeghl-tunnel\.[a-zA-Z0-9]+$ ]]
+          trap 'ssh -i ~/.ssh/bridgeghl-tunnel "$target" "rm -rf -- $remote_stage" >/dev/null 2>&1 || true' EXIT
+          scp -q -i ~/.ssh/bridgeghl-tunnel tunnel-release/tunnel-client "$target:$remote_stage/tunnel-client"
+          ssh -i ~/.ssh/bridgeghl-tunnel "$target" "bash -s -- $remote_stage" <<'REMOTE'
+          set -euo pipefail
+          privilege=()
+          if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
+          [[ $(uname -m) == x86_64 ]]
+          "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service
+          "${privilege[@]}" install -d -m 755 /opt/bridgeghl-tunnel
+          "${privilege[@]}" install -d -m 700 /etc/bridgeghl-tunnel
+          # Preserve only a binary rollback; never restore an old credential.
+          if "${privilege[@]}" test -f /opt/bridgeghl-tunnel/tunnel-client; then
+            "${privilege[@]}" cp -a /opt/bridgeghl-tunnel/tunnel-client /opt/bridgeghl-tunnel/tunnel-client.previous
+          fi
+          "${privilege[@]}" install -m 755 "$1/tunnel-client" /opt/bridgeghl-tunnel/tunnel-client.next
+          "${privilege[@]}" mv /opt/bridgeghl-tunnel/tunnel-client.next /opt/bridgeghl-tunnel/tunnel-client
+          "${privilege[@]}" tee /etc/systemd/system/bridgeghl-tunnel.service >/dev/null <<'UNIT'
+          [Unit]
+          Description=Private OpenAI tunnel to governed BridgeGHL MCP
+          After=network-online.target bridgeghl-mcp.service
+          Wants=network-online.target
+          Requires=bridgeghl-mcp.service
+          [Service]
+          Type=simple
+          DynamicUser=yes
+          WorkingDirectory=/opt/bridgeghl-tunnel
+          EnvironmentFile=/etc/bridgeghl-tunnel/runtime.env
+          Environment=CONTROL_PLANE_TUNNEL_ID=tunnel_6ab421054e788191863ca2de68149862
+          Environment=MCP_SERVER_URL=http://127.0.0.1:8001/mcp
+          Environment=HEALTH_LISTEN_ADDR=127.0.0.1:8002
+          ExecStart=/opt/bridgeghl-tunnel/tunnel-client run --log.level=info --log.format=json
+          Restart=on-failure
+          RestartSec=10
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          REMOTE
+          # Secret travels only through SSH stdin; never argv, artifacts, or logs.
+          python3 - <<'PY' | ssh -i ~/.ssh/bridgeghl-tunnel "$target" 'if [ "$(id -u)" -eq 0 ]; then install -m 600 /dev/stdin /etc/bridgeghl-tunnel/runtime.env.next && mv /etc/bridgeghl-tunnel/runtime.env.next /etc/bridgeghl-tunnel/runtime.env; else sudo -n install -m 600 /dev/stdin /etc/bridgeghl-tunnel/runtime.env.next && sudo -n mv /etc/bridgeghl-tunnel/runtime.env.next /etc/bridgeghl-tunnel/runtime.env; fi'
+          import os
+          print("CONTROL_PLANE_API_KEY=" + os.environ["CONTROL_PLANE_API_KEY"].strip())
+          PY
+          ssh -i ~/.ssh/bridgeghl-tunnel "$target" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          privilege=()
+          if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
+          "${privilege[@]}" systemctl daemon-reload
+          "${privilege[@]}" systemctl enable bridgeghl-tunnel.service
+          "${privilege[@]}" systemctl restart bridgeghl-tunnel.service
+          for attempt in {1..30}; do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8002/readyz >/dev/null; then
+              "${privilege[@]}" systemctl is-active --quiet bridgeghl-tunnel.service
+              echo "tunnel_ready_verified=true"
+              echo "tunnel_id=tunnel_6ab421054e788191863ca2de68149862"
+              exit 0
+            fi
+            sleep 2
+          done
+          # Print only classified failure facts, never raw runtime logs.
+          "${privilege[@]}" journalctl -u bridgeghl-tunnel.service --since '3 minutes ago' --no-pager -o cat | python3 -c 'import sys; s=sys.stdin.read().lower(); print("tunnel_ready_verified=false"); print("auth_failure_detected=" + str(any(x in s for x in ("unauthorized","forbidden","invalid api key","401","403"))).lower()); print("connection_failure_detected=" + str(any(x in s for x in ("timeout","connection refused","no such host"))).lower())'
+          exit 1
+          REMOTE
+      - name: Clean up runner material
+        if: always()
+        run: rm -f ~/.ssh/bridgeghl-tunnel
