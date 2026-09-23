@@ -47,3 +47,7 @@ No Mailgun, Cloudflare DNS write, or HighLevel email-settings administration is 
 | Dzokden Store Manager Ziji | pqexpert/Dzokden-Store-Manager-Ziji | Governed native Shopify route for Tantric Treasures; no Dzokden customer/order/payment/fulfillment data through RSC HighLevel or BridgeGHL. |
 
 GitHub owns source, deployment workflows and protected deployment configuration; IONOS runs persistent services. ChatGPT remains the actor/tool invocation surface. A GitHub environment is repository-scoped: a same-named environment in another repository does not automatically share secret values. Keep provider secrets with the service that consumes them, not in all actor repositories. The local actor bootstrap pointers resolve this runbook; these source edits do not prove that hosted actors consumed the changes.
+
+## Runtime credential provisioning checkpoint
+
+The Platform create-key form is prepared in Ziji Fabric with name `bridgeghl-ionos-rsc-runtime`, Restricted permissions, and only Tunnels Read + Use (two permissions); it has not been submitted. Store the resulting credential only in `pqexpert/BridgeGHL` environment `zijifabric` as `OPENAI_TUNNEL_RUNTIME_KEY`. Provision it to the tunnel service as `CONTROL_PLANE_API_KEY`, never as the admin key. The current browser credential-change rule requires the owner to complete key creation and secret submission. No existing secret was read or replaced in this step. After secure provisioning, deploy and verify the client before publishing the ChatGPT app or removing the old binding.
