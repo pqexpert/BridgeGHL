@@ -1,0 +1,48 @@
+name: Verify inquiry workflow acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/accept-inquiry-workflow.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 8
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate syntax
+        run: python3 -m py_compile scripts/accept_inquiry_workflow.py
+      - name: Verify and complete isolated native workflow test task
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh/bridgeghl-mcp"
+          p.write_text(raw + "\n")
+          p.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/bridgeghl-mcp >/dev/null
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          scp -q -i ~/.ssh/bridgeghl-mcp scripts/accept_inquiry_workflow.py "$REMOTE_USER@$REMOTE_HOST:/tmp/accept_inquiry_workflow.py"
+          ssh -o LogLevel=ERROR -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" 'sudo -n install -m 600 /tmp/accept_inquiry_workflow.py /var/lib/bridgeghl/ecosystem/accept_inquiry_workflow.py && rm -f /tmp/accept_inquiry_workflow.py && sudo -n systemd-run --quiet --wait --pipe --collect --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env /var/lib/bridgeghl/career-import/runner/bin/python /var/lib/bridgeghl/ecosystem/accept_inquiry_workflow.py'
+      - name: Remove SSH material
+        if: always()
+        run: rm -f ~/.ssh/bridgeghl-mcp
