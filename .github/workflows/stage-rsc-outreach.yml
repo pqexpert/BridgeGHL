@@ -97,8 +97,11 @@ jobs:
                   raise SystemExit('preview_config_conflict=true')
               try:
                   config.write_text(desired)
-                  check = subprocess.run(['nginx','-t'], capture_output=True)
+                  check = subprocess.run(['nginx','-T'], capture_output=True)
                   if check.returncode: raise RuntimeError('nginx_validation')
+                  loaded = str(config).encode() in check.stdout
+                  print('preview_config_loaded=' + str(loaded).lower())
+                  if not loaded: raise RuntimeError('preview_config_not_included')
                   subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
                   for attempt in range(10):
                       try:
@@ -121,6 +124,8 @@ jobs:
                   failure.write_text(type(error).__name__ + ': ' + str(error))
                   failure.chmod(0o600)
                   print('preview_error_class=' + type(error).__name__)
+                  if isinstance(error, urllib.error.URLError):
+                      print('preview_network_errno=' + str(getattr(error.reason, 'errno', None)))
                   if previous is None: config.unlink(missing_ok=True)
                   else: config.write_bytes(previous)
                   subprocess.run(['nginx','-t'], capture_output=True, check=True)
