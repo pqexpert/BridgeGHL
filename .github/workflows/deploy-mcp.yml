@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridgeghl-production
-  cancel-in-progress: false
+  group: bridgeghl-mcp-recovery
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -104,11 +104,15 @@ jobs:
           "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service
           "${privilege[@]}" systemctl restart bridgeghl-mcp.service
           "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service
-          # A non-authenticated GET must not expose CRM data, but must reach MCP.
+          # Bound the probe; GET /mcp is a streaming endpoint and must not be used here.
           for attempt in {1..12}; do
-            status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8001/mcp || true)
-            if [[ "$status" == 405 || "$status" == 400 || "$status" == 200 ]]; then
-              echo "loopback_mcp_responsive=true"
+            if response=$(curl --max-time 8 --fail --silent --show-error \
+              --header 'Content-Type: application/json' \
+              --header 'Accept: application/json, text/event-stream' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
+              http://127.0.0.1:8001/mcp) && \
+              printf '%s' "$response" | python3 -c 'import json,sys; assert json.load(sys.stdin)["result"]["serverInfo"]["name"] == "BridgeGHL governed CRM"'; then
+              echo "loopback_mcp_initialized=true"
               exit 0
             fi
             sleep 1
