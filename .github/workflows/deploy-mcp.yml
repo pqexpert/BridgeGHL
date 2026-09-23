@@ -112,7 +112,25 @@ jobs:
               --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
               http://127.0.0.1:8001/mcp) && \
               printf '%s' "$response" | python3 -c 'import json,sys; assert json.load(sys.stdin)["result"]["serverInfo"]["name"] == "BridgeGHL governed CRM"'; then
-              echo "loopback_mcp_initialized=true"
+              health=$(curl --max-time 15 --fail --silent --show-error \
+                --header 'Content-Type: application/json' \
+                --header 'Accept: application/json, text/event-stream' \
+                --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridge_health","arguments":{}}}' \
+                http://127.0.0.1:8001/mcp)
+              printf '%s' "$health" | python3 -c '
+import json, sys
+def healthy(v):
+    if isinstance(v, dict):
+        return v.get("state") == "HEALTHY" or any(healthy(item) for item in v.values())
+    if isinstance(v, list):
+        return any(healthy(item) for item in v)
+    if isinstance(v, str) and v.startswith("{"):
+        try: return healthy(json.loads(v))
+        except ValueError: return False
+    return False
+assert healthy(json.load(sys.stdin))
+'
+              echo "loopback_mcp_health_verified=true"
               exit 0
             fi
             sleep 1
