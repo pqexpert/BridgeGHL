@@ -33,6 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install 'mcp==2.2.0'
+          python -m pip download --only-binary=:all: --dest mcp-wheels 'mcp==2.2.0'
+          tar -czf mcp-wheels.tgz mcp-wheels
           python -m py_compile mcp_server.py
           python -c 'from mcp_server import SERVER; assert SERVER.name == "BridgeGHL governed CRM"'
       - name: Deploy isolated loopback service
@@ -52,10 +54,14 @@ jobs:
           PY
           ssh-keygen -y -f ~/.ssh/bridgeghl-mcp >/dev/null
           ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          scp -i ~/.ssh/bridgeghl-mcp mcp_server.py "$REMOTE_USER@$REMOTE_HOST:/tmp/bridgeghl-mcp.$GITHUB_RUN_ID.py"
-          ssh -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" "bash -s -- '/tmp/bridgeghl-mcp.$GITHUB_RUN_ID.py'" <<'REMOTE'
+          scp -i ~/.ssh/bridgeghl-mcp mcp_server.py mcp-wheels.tgz "$REMOTE_USER@$REMOTE_HOST:/tmp/"
+          ssh -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" "bash -s -- /tmp/mcp_server.py /tmp/mcp-wheels.tgz" <<'REMOTE'
           set -euo pipefail
           source_file="$1"
+          wheel_archive="$2"
+          wheel_dir=$(mktemp -d)
+          trap 'rm -rf "$wheel_dir" "$source_file" "$wheel_archive"' EXIT
+          tar -xzf "$wheel_archive" -C "$wheel_dir"
           app_dir=/home/bridgeadmin/apps/BridgeGHL
           unit=/etc/systemd/system/bridgeghl-mcp.service
           privilege=()
@@ -67,12 +73,11 @@ jobs:
           fi
           python3.11 --version
           "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp
-          "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check 'mcp==2.2.0'
+          "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check --no-index --find-links="$wheel_dir/mcp-wheels" 'mcp==2.2.0'
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
             "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$app_dir/mcp_server.py.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
           fi
           "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py"
-          rm -f "$source_file"
           "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT'
           [Unit]
           Description=BridgeGHL governed MCP adapter (loopback only)
