@@ -93,6 +93,32 @@ jobs:
               runtime_evidence = dict(selinux=enforcement, nginx_unit=unit, master_executable=main_exe, master_command=main_command, bind_errors=diagnostic_lines, listening_sockets=sockets)
               print('preview_bind_permission_denied=' + str(preview_denied).lower())
               print('selinux_enforcing=' + str(enforcement == 'Enforcing').lower())
+              # Read-only cutover preflight: keep certificate paths and addresses private.
+              import socket
+              domains = ('restoration-mt.com', 'restorationsecurityconsultants.com', 'restorationsecurityoutreach.com')
+              cert_paths = re.findall(r'^\s*ssl_certificate\s+([^;\s]+);', result.stdout, re.MULTILINE)
+              certificates = []
+              for cert_path in sorted(set(cert_paths)):
+                  if not cert_path.startswith('/') or not Path(cert_path).is_file(): continue
+                  expiry = subprocess.run(['openssl','x509','-in',cert_path,'-noout','-checkend','604800'], capture_output=True, timeout=10)
+                  matches = {}
+                  for domain in domains:
+                      tested = subprocess.run(['openssl','x509','-in',cert_path,'-noout','-checkhost',domain], capture_output=True, timeout=10)
+                      matches[domain] = tested.returncode == 0 and b'does match certificate' in tested.stdout
+                  certificates.append(dict(path=cert_path, valid_next_week=expiry.returncode == 0, matches=matches))
+              _, local_addresses = probe(['hostname','-I'])
+              local_set = set(local_addresses.split())
+              dns = {}
+              for domain in domains:
+                  try:
+                      addresses = sorted({item[4][0] for item in socket.getaddrinfo(domain,443,type=socket.SOCK_STREAM)})
+                      dns[domain] = dict(addresses=addresses, points_to_local_host=bool(set(addresses) & local_set))
+                  except OSError:
+                      dns[domain] = dict(addresses=[], points_to_local_host=False)
+                  print(domain + '_dns_points_to_host=' + str(dns[domain]['points_to_local_host']).lower())
+                  print(domain + '_certificate_available=' + str(any(c['valid_next_week'] and c['matches'][domain] for c in certificates)).lower())
+              print('certificate_manager_available=' + str(bool(shutil.which('certbot'))).lower())
+              runtime_evidence['cutover_preflight'] = dict(certificates=certificates, dns=dns, certificate_manager_available=bool(shutil.which('certbot')))
               report = dict(observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), records=records,
                             runtime_evidence=runtime_evidence, scope='nginx routes, service paths and bind diagnostics; no environment, credentials, headers or request data')
               fd, name = tempfile.mkstemp(dir=directory, prefix='.inventory-')
