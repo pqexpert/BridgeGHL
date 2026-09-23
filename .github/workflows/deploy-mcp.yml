@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridgeghl-mcp-recovery
-  cancel-in-progress: true
+  group: bridgeghl-mcp-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
