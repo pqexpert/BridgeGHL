@@ -2,6 +2,8 @@ name: Inspect IONOS VPS capacity and BridgeGHL routing
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 13 * * 1"
   push:
     branches: [main]
     paths: [".github/workflows/vps-capacity.yml"]
@@ -60,13 +62,14 @@ jobs:
           enabled = run("systemctl", "is-enabled", "bridgeghl.service")
           configured_env = subprocess.run(["sudo", "-n", "test", "-f", "/etc/bridgeghl/bridgeghl.env"], capture_output=True).returncode == 0
           nginx = run("systemctl", "is-active", "nginx")
+          mcp_active = run("systemctl", "is-active", "bridgeghl-mcp.service")
           from urllib.request import urlopen
           try:
               with urlopen("http://127.0.0.1:8000/health", timeout=5) as r:
                   health = json.load(r).get("state", "unknown")
           except Exception:
               health = "unreachable"
-          print(json.dumps({"cpu_count":cpu,"python_version":platform.python_version(),"architecture":platform.machine(),"python311_installed":bool(shutil.which("python3.11")),"python311_pkg_available":subprocess.run(["dnf","list","--available","python3.11","--quiet"],capture_output=True,timeout=30).returncode==0,"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
+          print(json.dumps({"cpu_count":cpu,"load_1m":round(os.getloadavg()[0],2),"mcp_service":mcp_active,"python_version":platform.python_version(),"architecture":platform.machine(),"python311_installed":bool(shutil.which("python3.11")),"python311_pkg_available":subprocess.run(["dnf","list","--available","python3.11","--quiet"],capture_output=True,timeout=30).returncode==0,"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
           PY
           REMOTE
       - name: Remove SSH material
