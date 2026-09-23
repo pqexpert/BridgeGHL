@@ -65,6 +65,7 @@ jobs:
           if ! command -v python3.11 >/dev/null; then
             "${privilege[@]}" dnf -y install python3.11 python3.11-pip
           fi
+          python3.11 --version
           "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp
           "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check 'mcp==2.2.0'
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
