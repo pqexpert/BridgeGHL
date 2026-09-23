@@ -72,8 +72,8 @@ jobs:
             "${privilege[@]}" dnf -y install python3.11 python3.11-pip
           fi
           python3.11 --version
-          "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp
-          "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check --no-index --find-links="$wheel_dir/mcp-wheels" 'mcp==2.2.0'
+          "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp-py311
+          "${privilege[@]}" /opt/bridgeghl-mcp-py311/bin/python -m pip install --disable-pip-version-check --no-index --find-links="$wheel_dir/mcp-wheels" 'mcp==2.2.0'
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
             "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$app_dir/mcp_server.py.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
           fi
@@ -90,7 +90,7 @@ jobs:
           User=bridgeadmin
           WorkingDirectory=/home/bridgeadmin/apps/BridgeGHL
           EnvironmentFile=/etc/bridgeghl/bridgeghl.env
-          ExecStart=/opt/bridgeghl-mcp/bin/python /home/bridgeadmin/apps/BridgeGHL/mcp_server.py
+          ExecStart=/opt/bridgeghl-mcp-py311/bin/python /home/bridgeadmin/apps/BridgeGHL/mcp_server.py
           Restart=on-failure
           RestartSec=3
           NoNewPrivileges=true
