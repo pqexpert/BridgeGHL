@@ -1,6 +1,6 @@
 # GitHub and IONOS cutover: BridgeGHL, Fabric, and mail
 
-Status as of 2026-09-23. Do not treat this document as proof that a ChatGPT app or Mailgun has been linked.
+Status as of 2026-09-23. ChatGPT-to-IONOS BridgeGHL health is verified; Income actor publication and Mailgun remain open.
 
 ## Working runtime
 
@@ -11,17 +11,25 @@ Status as of 2026-09-23. Do not treat this document as proof that a ChatGPT app 
 - Available governed tools: `bridge_health`, `dry_run_opportunity_update`, `execute_opportunity_update`, `dry_run_contact_tags`, and `execute_contact_tags`. Governed writes remain subject to the BridgeGHL allowlist, audit, and readback.
 - Weekly `vps-capacity.yml` checks service states, health, CPU load, RAM, and disk. Latest sampled VPS: 4 CPUs, about 7.6 GiB RAM (about 7 GiB available), 238 GiB root volume (about 231 GiB free). No upgrade is warranted on those measurements. A ChatGPT weekly capacity alert watches for <1 GiB available RAM, <30 GiB disk, sustained load beyond 4 CPUs, or service/health failures. Split workload or upgrade when measured pressure persists.
 
-## ChatGPT/Fabric binding still required
+## Verified ChatGPT-to-IONOS route
 
-The existing `MCP for Fabric Use` tool `highlevel_governed_write` routes to the Base44 RSC Operations Console deployment and still returns a HighLevel invalid-PIT 401. Its source function was replaced with a retired-route response and the source MCP config no longer advertises the tool (Base44 checkpoint `513c8a43b9bd41119c75d08ac6f7c5f4b3cfc2a6`), but the deployed/cached tool has **not** updated. Do not use it to infer VPS health or claim the old connection is gone.
+The dedicated tunnel `bridgeghl-ionos-rsc` (`tunnel_6ab421054e788191863ca2de68149862`) is associated with Restoration and Josh Allen's Workspace. The user provisioned a restricted Tunnels Read + Use key in `zijifabric` secret `OPENAI_TUNNEL_RUNTIME_KEY`. [Deployment run 35908420681](https://github.com/pqexpert/BridgeGHL/actions/runs/35908420681) installed checksum-pinned official tunnel-client v0.0.14 and verified `tunnel_ready_verified=true`.
 
-1. In an authenticated OpenAI Platform/ChatGPT admin session, establish a private route from ChatGPT to the VPS MCP service, such as the official secure MCP tunnel (outbound connection from VPS to OpenAI) or another authenticated TLS endpoint. Never publish 8001 directly or place the Bridge API key in a query string or app description.
-2. Create/repoint the ChatGPT custom app to the new MCP endpoint, review its tools, publish/refresh the tool snapshot, and invoke `bridge_health` through that actual ChatGPT app. Record the app binding and health result in this repository without tokens.
-3. Remove the old Base44 Fabric MCP app/tool binding from ChatGPT, then retire the legacy Base44 `HIGHLEVEL_PIT` secret after confirming no other live consumer. An old tool invocation returning 401 means this cleanup remains open. Keep any unrelated Base44 tools separately inventoried before retiring the entire app.
+`bridgeghl-tunnel.service` connects outbound to OpenAI and forwards to `http://127.0.0.1:8001/mcp`. Its health endpoint is `127.0.0.1:8002`. The key is held in root-only `/etc/bridgeghl-tunnel/runtime.env`, mapped to `CONTROL_PLANE_API_KEY`; the daemon runs as a systemd DynamicUser. No admin key is installed, no public inbound port was opened, and no VPS reboot was needed.
 
-On 2026-09-23, the cloud browser authenticated to Josh Allen's Workspace (Business) and the Restoration Platform organization. The Platform Tunnels screen has two preexisting workspace-associated tunnels, `openaitunnelforworkspace` and `vscodetun`. The dedicated `bridgeghl-ionos-rsc` tunnel was created and read back after reload: `tunnel_6ab421054e788191863ca2de68149862`, associated with Restoration and Josh Allen's Workspace. This proves the tunnel registration only. Runtime credential provisioning, a connected VPS tunnel client, ChatGPT app publication/tool discovery, and actor consumption remain pending.
+The connected ChatGPT app **BridgeGHL IONOS** is `asdk_app_6ab426506bb0819183fcf4deefac70fa`; initial discovered version `asdk_app_v_6ab426506bbc8191b206aa4f866cf097`. The UI reports development mode, not workspace-wide publication. All five governed tools were discovered through the private tunnel. Application-layer auth is None because access uses the workspace-associated OpenAI tunnel; the MCP listener stays loopback-only.
 
-The GitHub `zijifabric` environment reportedly has an OpenAI admin key, but that key is for management and must **not** be used by the persistent `tunnel-client` service. Its runtime needs a separate restricted Platform API key with Tunnels Read + Use, scoped to the intended tunnel, stored as a protected GitHub environment secret and provisioned to the VPS with root-only permissions. Never print either key in workflow logs. The OpenAI [permissions guide](https://github.com/openai/tunnel-client/blob/master/docs/permissions.md) distinguishes these credentials. Once the dedicated tunnel and runtime key exist, deploy `tunnel-client` as a separate systemd service connecting to `http://127.0.0.1:8001/mcp`, verify `doctor` and readiness, then scan the app tools in ChatGPT.
+A [ChatGPT verification invocation](https://chatgpt.com/c/6ab426f1-ab04-83ea-8c75-68a951beda4c) of `mcp__codex_apps__bridgeghl_ionos_bridge_health` returned `ok=true`, `state=HEALTHY`, and `highlevel_readback: status=200` at **2026-09-23T19:22:42.929543Z**. No CRM mutation occurred. Approved custom-field/tag counts were both zero; health success does not broaden write authority.
+
+Health and dry-run tool annotations now explicitly identify read-only/non-destructive behavior in deployed source ([run 35908787937](https://github.com/pqexpert/BridgeGHL/actions/runs/35908787937)); any earlier app snapshot may need Refresh to consume the new annotations.
+
+### Actor configuration readback and remaining cleanup
+
+- **RSC:** new BridgeGHL IONOS app attached; current GitHub/IONOS route and Calendar boundary added; Base44 and MCP for Fabric Use removed. Update succeeded and persisted after reload.
+- **Dzokden:** current GitHub/IONOS source and native Shopify boundary added. Base44, MCP for Fabric Use, and the out-of-scope highlevel-write-bridge skill removed. Update succeeded and persisted after reload; dzokden-shopify-operator remains attached.
+- **Income:** repository route is current. Hosted editor was prepared with BridgeGHL IONOS added, Base44/MCP for Fabric Use removed and a current route override, but repeated Update/Retry attempts showed **Unsaved changes** and failed to persist after reload. A smaller edit also failed. Do not claim Income runtime alignment. The latest four edits remain pending in the editor; investigate the native save failure before another normal Income cycle depends on this route.
+- No synthetic paid actor cycles were launched to manufacture adoption evidence. Next useful receipts must identify actual route consumption.
+- The old shared `MCP for Fabric Use` app still exists and exposes other tools; global disconnection and legacy Base44 PIT retirement remain open pending consumer inventory. Its historical invalid-PIT 401 is not the new IONOS route's health.
 
 ## Mailgun and HighLevel
 
@@ -42,12 +50,9 @@ No Mailgun, Cloudflare DNS write, or HighLevel email-settings administration is 
 
 | Actor | Source home | Authorized domain route |
 | --- | --- | --- |
-| RSC Command Center | pqexpert/rsc-operations-console | Governed BridgeGHL on IONOS; new private tunnel is registered, ChatGPT binding pending. |
-| Income Accelerator | pqexpert/income-accelerator | Same governed BridgeGHL capability for admitted CRM work, retaining Income's own authority and data boundaries; ChatGPT binding pending. |
+| RSC Command Center | pqexpert/rsc-operations-console | BridgeGHL IONOS app attached and saved; end-to-end bridge health verified. |
+| Income Accelerator | pqexpert/income-accelerator | Same governed BridgeGHL capability for admitted CRM work, retaining Income's own authority and data boundaries; hosted editor save failed; binding not yet persisted. |
 | Dzokden Store Manager Ziji | pqexpert/Dzokden-Store-Manager-Ziji | Governed native Shopify route for Tantric Treasures; no Dzokden customer/order/payment/fulfillment data through RSC HighLevel or BridgeGHL. |
 
 GitHub owns source, deployment workflows and protected deployment configuration; IONOS runs persistent services. ChatGPT remains the actor/tool invocation surface. A GitHub environment is repository-scoped: a same-named environment in another repository does not automatically share secret values. Keep provider secrets with the service that consumes them, not in all actor repositories. The local actor bootstrap pointers resolve this runbook; these source edits do not prove that hosted actors consumed the changes.
 
-## Runtime credential provisioning checkpoint
-
-The Platform create-key form is prepared in Ziji Fabric with name `bridgeghl-ionos-rsc-runtime`, Restricted permissions, and only Tunnels Read + Use (two permissions); it has not been submitted. Store the resulting credential only in `pqexpert/BridgeGHL` environment `zijifabric` as `OPENAI_TUNNEL_RUNTIME_KEY`. Provision it to the tunnel service as `CONTROL_PLANE_API_KEY`, never as the admin key. The current browser credential-change rule requires the owner to complete key creation and secret submission. No existing secret was read or replaced in this step. After secure provisioning, deploy and verify the client before publishing the ChatGPT app or removing the old binding.
