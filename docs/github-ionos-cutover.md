@@ -19,7 +19,7 @@ The existing `MCP for Fabric Use` tool `highlevel_governed_write` routes to the 
 2. Create/repoint the ChatGPT custom app to the new MCP endpoint, review its tools, publish/refresh the tool snapshot, and invoke `bridge_health` through that actual ChatGPT app. Record the app binding and health result in this repository without tokens.
 3. Remove the old Base44 Fabric MCP app/tool binding from ChatGPT, then retire the legacy Base44 `HIGHLEVEL_PIT` secret after confirming no other live consumer. An old tool invocation returning 401 means this cleanup remains open. Keep any unrelated Base44 tools separately inventoried before retiring the entire app.
 
-On 2026-09-23, the cloud browser authenticated to Josh Allen's Workspace (Business) and the Restoration Platform organization. The Platform Tunnels screen has two preexisting workspace-associated tunnels, `openaitunnelforworkspace` and `vscodetun`. A separate `bridgeghl-ionos-rsc` tunnel was prepared in the Create form with Restoration organization and Josh Allen's Workspace selected, but **Create was not submitted**. No runtime client or ChatGPT app is linked yet.
+On 2026-09-23, the cloud browser authenticated to Josh Allen's Workspace (Business) and the Restoration Platform organization. The Platform Tunnels screen has two preexisting workspace-associated tunnels, `openaitunnelforworkspace` and `vscodetun`. The dedicated `bridgeghl-ionos-rsc` tunnel was created and read back after reload: `tunnel_6ab421054e788191863ca2de68149862`, associated with Restoration and Josh Allen's Workspace. This proves the tunnel registration only. Runtime credential provisioning, a connected VPS tunnel client, ChatGPT app publication/tool discovery, and actor consumption remain pending.
 
 The GitHub `zijifabric` environment reportedly has an OpenAI admin key, but that key is for management and must **not** be used by the persistent `tunnel-client` service. Its runtime needs a separate restricted Platform API key with Tunnels Read + Use, scoped to the intended tunnel, stored as a protected GitHub environment secret and provisioned to the VPS with root-only permissions. Never print either key in workflow logs. The OpenAI [permissions guide](https://github.com/openai/tunnel-client/blob/master/docs/permissions.md) distinguishes these credentials. Once the dedicated tunnel and runtime key exist, deploy `tunnel-client` as a separate systemd service connecting to `http://127.0.0.1:8001/mcp`, verify `doctor` and readiness, then scan the app tools in ChatGPT.
 
@@ -37,3 +37,13 @@ No Mailgun, Cloudflare DNS write, or HighLevel email-settings administration is 
 ## Other migration work
 
 `restoration-mt.com` still serves the existing RSC website. Before moving its runtime, inventory its live Nginx route and other redirects/forwarded domains. A checked-in `nginx.conf` refers to port 3000 while live BridgeGHL uses 8000; do not deploy that old config unreviewed. Put site source and deploy workflow under GitHub and use the IONOS VPS as the production runtime after the inventory.
+
+## Actor access routes
+
+| Actor | Source home | Authorized domain route |
+| --- | --- | --- |
+| RSC Command Center | pqexpert/rsc-operations-console | Governed BridgeGHL on IONOS; new private tunnel is registered, ChatGPT binding pending. |
+| Income Accelerator | pqexpert/income-accelerator | Same governed BridgeGHL capability for admitted CRM work, retaining Income's own authority and data boundaries; ChatGPT binding pending. |
+| Dzokden Store Manager Ziji | pqexpert/Dzokden-Store-Manager-Ziji | Governed native Shopify route for Tantric Treasures; no Dzokden customer/order/payment/fulfillment data through RSC HighLevel or BridgeGHL. |
+
+GitHub owns source, deployment workflows and protected deployment configuration; IONOS runs persistent services. ChatGPT remains the actor/tool invocation surface. A GitHub environment is repository-scoped: a same-named environment in another repository does not automatically share secret values. Keep provider secrets with the service that consumes them, not in all actor repositories. The local actor bootstrap pointers resolve this runbook; these source edits do not prove that hosted actors consumed the changes.
