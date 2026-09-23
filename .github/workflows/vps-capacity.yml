@@ -69,7 +69,24 @@ jobs:
                   health = json.load(r).get("state", "unknown")
           except Exception:
               health = "unreachable"
+          load = os.getloadavg()
+          alerts = []
+          if mem.get("MemAvailable", 0) < 1024:
+              alerts.append("available_ram_below_1gib")
+          if disk.free < 30 * 1024**3:
+              alerts.append("free_disk_below_30gib")
+          if cpu and load[1] > cpu and load[2] > cpu:
+              alerts.append("5m_and_15m_load_above_cpu_count")
+          if active != "active":
+              alerts.append("bridge_service_not_active")
+          if mcp_active != "active":
+              alerts.append("mcp_service_not_active")
+          if health != "HEALTHY":
+              alerts.append("bridge_health_not_healthy")
+          print(json.dumps({"capacity_alerts": alerts, "load_5m": round(load[1], 2), "load_15m": round(load[2], 2), "status": "attention" if alerts else "healthy"}, sort_keys=True))
           print(json.dumps({"cpu_count":cpu,"load_1m":round(os.getloadavg()[0],2),"mcp_service":mcp_active,"python_version":platform.python_version(),"architecture":platform.machine(),"python311_installed":bool(shutil.which("python3.11")),"python311_pkg_available":subprocess.run(["dnf","list","--available","python3.11","--quiet"],capture_output=True,timeout=30).returncode==0,"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
+          if alerts:
+              raise SystemExit(1)
           PY
           REMOTE
       - name: Remove SSH material
