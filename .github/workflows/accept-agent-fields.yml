@@ -1,9 +1,6 @@
 name: Verify governed CRM field acceptance
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [".github/workflows/accept-agent-fields.yml"]
 permissions:
   contents: read
 concurrency:
