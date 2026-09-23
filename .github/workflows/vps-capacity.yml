@@ -66,7 +66,7 @@ jobs:
                   health = json.load(r).get("state", "unknown")
           except Exception:
               health = "unreachable"
-          print(json.dumps({"cpu_count":cpu,"python_version":platform.python_version(),"architecture":platform.machine(),"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
+          print(json.dumps({"cpu_count":cpu,"python_version":platform.python_version(),"architecture":platform.machine(),"python311_installed":bool(shutil.which("python3.11")),"python311_pkg_available":subprocess.run(["dnf","list","--available","python3.11","--quiet"],capture_output=True,timeout=30).returncode==0,"memory_mib":mem,"root_disk_gib":{"total":disk.total//(1024**3),"free":disk.free//(1024**3)},"bridgeghl_service":active,"bridgeghl_enabled":enabled,"protected_env_present":configured_env,"nginx_service":nginx,"loopback_health_state":health}, sort_keys=True))
           PY
           REMOTE
       - name: Remove SSH material
