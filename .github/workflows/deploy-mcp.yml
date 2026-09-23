@@ -1,0 +1,111 @@
+name: Deploy VPS governed MCP adapter
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["mcp_server.py", ".github/workflows/deploy-mcp.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 15
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate MCP adapter
+        run: |
+          set -euo pipefail
+          python -m pip install 'mcp==2.2.0'
+          python -m py_compile mcp_server.py
+          python -c 'from mcp_server import SERVER; assert SERVER.name == "BridgeGHL governed CRM"'
+      - name: Deploy isolated loopback service
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh/bridgeghl-mcp"
+          p.write_text(raw + "\n")
+          p.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/bridgeghl-mcp >/dev/null
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          scp -i ~/.ssh/bridgeghl-mcp mcp_server.py "$REMOTE_USER@$REMOTE_HOST:/tmp/bridgeghl-mcp.$GITHUB_RUN_ID.py"
+          ssh -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" "bash -s -- '/tmp/bridgeghl-mcp.$GITHUB_RUN_ID.py'" <<'REMOTE'
+          set -euo pipefail
+          source_file="$1"
+          app_dir=/home/bridgeadmin/apps/BridgeGHL
+          unit=/etc/systemd/system/bridgeghl-mcp.service
+          privilege=()
+          if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
+          test -s "$source_file"
+          "${privilege[@]}" test -s /etc/bridgeghl/bridgeghl.env
+          "${privilege[@]}" python3 -m venv /opt/bridgeghl-mcp
+          "${privilege[@]}" /opt/bridgeghl-mcp/bin/python -m pip install --disable-pip-version-check 'mcp==2.2.0'
+          if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
+            "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$app_dir/mcp_server.py.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
+          fi
+          "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py"
+          rm -f "$source_file"
+          "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT'
+          [Unit]
+          Description=BridgeGHL governed MCP adapter (loopback only)
+          After=network-online.target bridgeghl.service
+          Wants=network-online.target
+          Requires=bridgeghl.service
+
+          [Service]
+          Type=simple
+          User=bridgeadmin
+          WorkingDirectory=/home/bridgeadmin/apps/BridgeGHL
+          EnvironmentFile=/etc/bridgeghl/bridgeghl.env
+          ExecStart=/opt/bridgeghl-mcp/bin/python /home/bridgeadmin/apps/BridgeGHL/mcp_server.py
+          Restart=on-failure
+          RestartSec=3
+          NoNewPrivileges=true
+          ProtectSystem=full
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          "${privilege[@]}" systemctl daemon-reload
+          "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service
+          "${privilege[@]}" systemctl restart bridgeghl-mcp.service
+          "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service
+          # A non-authenticated GET must not expose CRM data, but must reach MCP.
+          for attempt in {1..12}; do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8001/mcp || true)
+            if [[ "$status" == 405 || "$status" == 400 || "$status" == 200 ]]; then
+              echo "loopback_mcp_responsive=true"
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+          REMOTE
+      - name: Remove SSH material
+        if: always()
+        run: rm -f ~/.ssh/bridgeghl-mcp
