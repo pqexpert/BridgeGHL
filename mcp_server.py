@@ -50,12 +50,13 @@ def dry_run_opportunity_update(
     pipeline_stage_id: str | None = None,
     status: str | None = None,
     assigned_to: str | None = None,
+    custom_fields: dict[str, str] | None = None,
 ) -> dict:
     """Validate a bounded opportunity change without mutating HighLevel."""
     return _call("/dry-run/opportunity/update", {
         "opportunity_id": opportunity_id,
         "reason": reason,
-        "changes": {"pipeline_stage_id": pipeline_stage_id, "status": status, "assigned_to": assigned_to},
+        "changes": {"pipeline_stage_id": pipeline_stage_id, "status": status, "assigned_to": assigned_to, "custom_fields": custom_fields or {}},
     })
 
 
@@ -66,12 +67,13 @@ def execute_opportunity_update(
     pipeline_stage_id: str | None = None,
     status: str | None = None,
     assigned_to: str | None = None,
+    custom_fields: dict[str, str] | None = None,
 ) -> dict:
     """Execute an authorized opportunity change with bridge audit and readback."""
     return _call("/execute/opportunity/update", {
         "opportunity_id": opportunity_id,
         "reason": reason,
-        "changes": {"pipeline_stage_id": pipeline_stage_id, "status": status, "assigned_to": assigned_to},
+        "changes": {"pipeline_stage_id": pipeline_stage_id, "status": status, "assigned_to": assigned_to, "custom_fields": custom_fields or {}},
     })
 
 
