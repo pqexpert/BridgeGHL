@@ -67,6 +67,15 @@ jobs:
               _, journal = probe(['journalctl', '-u', 'nginx', '--since', '2026-09-23 19:00:00 UTC', '--no-pager', '-o', 'cat'])
               # Retain only bind/reload diagnostics, never request logs or environment.
               diagnostic_lines = [line for line in journal.splitlines() if ('bind()' in line or 'Reload failed' in line or 'Failed to reload' in line)][-30:]
+              # Nginx can acknowledge systemd reload while reporting a failed bind only in its error log.
+              for log_name in re.findall(r'^\\s*error_log\\s+(/var/log/nginx/[^;\\s]+)', result.stdout, re.MULTILINE):
+                  log_path = Path(log_name)
+                  if log_path.is_file():
+                      with log_path.open('rb') as log_stream:
+                          log_stream.seek(max(0, log_path.stat().st_size - 131072))
+                          tail = log_stream.read().decode('utf-8', errors='replace')
+                      diagnostic_lines.extend(line for line in tail.splitlines() if '2026/09/23' in line and 'bind()' in line and '18081' in line)
+              diagnostic_lines = diagnostic_lines[-30:]
               preview_denied = any('18081' in line and ('Permission denied' in line or '13:' in line) for line in diagnostic_lines)
               _, sockets = probe(['ss', '-ltnp'])
               runtime_evidence = dict(selinux=enforcement, nginx_unit=unit, bind_errors=diagnostic_lines, listening_sockets=sockets)
