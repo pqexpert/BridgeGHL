@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pqexpert/rsc-operations-console
-          ref: 6a9d9fa768dddd0ae97e51462cf9bd3f52148382
+          ref: e96a5d2c6185ed85a9dc333270129a784c27cdee
           token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           sparse-checkout: web/outreach
@@ -34,7 +34,7 @@ jobs:
           if ! npm ci > /tmp/rsc-build.log 2>&1; then echo "dependency_install=false; details_withheld=true"; exit 1; fi
           if ! npm run build >> /tmp/rsc-build.log 2>&1; then echo "static_build=false; details_withheld=true"; exit 1; fi
           test -s dist/index.html
-          printf '%s\n' '6a9d9fa768dddd0ae97e51462cf9bd3f52148382' > dist/revision.txt
+          printf '%s\n' 'e96a5d2c6185ed85a9dc333270129a784c27cdee' > dist/revision.txt
           tar -czf /tmp/rsc-outreach.tar.gz -C dist .
           echo "static_build=true"
       - name: Stage immutable release through existing VPS transport
@@ -59,11 +59,11 @@ jobs:
           ssh-keygen -y -f ~/.ssh/rsc-stage >/dev/null 2>&1
           ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
           test -s ~/.ssh/rsc-hosts
-          scp -q -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage /tmp/rsc-outreach.tar.gz "$REMOTE_USER@$REMOTE_HOST:/tmp/rsc-outreach-6a9d9fa.tar.gz"
+          scp -q -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage /tmp/rsc-outreach.tar.gz "$REMOTE_USER@$REMOTE_HOST:/tmp/rsc-outreach-e96a5d2.tar.gz"
           ssh -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
           import tarfile, pathlib, hashlib, json, os, datetime
-          revision = '6a9d9fa768dddd0ae97e51462cf9bd3f52148382'
-          archive = pathlib.Path('/tmp/rsc-outreach-6a9d9fa.tar.gz')
+          revision = 'e96a5d2c6185ed85a9dc333270129a784c27cdee'
+          archive = pathlib.Path('/tmp/rsc-outreach-e96a5d2.tar.gz')
           root = pathlib.Path('/var/www/rsc-outreach/releases') / revision
           try:
               root.mkdir(parents=True, exist_ok=True)
@@ -83,9 +83,36 @@ jobs:
               print('release_staged=true; revision=' + revision + '; live_cutover=false')
 
               import subprocess, urllib.request, time
+              import shutil, re, socket
+              enforcement = subprocess.run(['getenforce'], capture_output=True, text=True, check=True).stdout.strip()
+              port = 18081
+              if enforcement == 'Enforcing':
+                  manager = shutil.which('semanage')
+                  if not manager:
+                      raise SystemExit('preview_policy_inventory_unavailable=true; live_cutover=false')
+                  policy = subprocess.run([manager, 'port', '-l'], capture_output=True, text=True, check=True).stdout
+                  allowed = set()
+                  for line in policy.splitlines():
+                      if re.match(r'^http_port_t\\s+tcp\\s+', line):
+                          for item in re.split(r',\\s*', re.sub(r'^http_port_t\\s+tcp\\s+', '', line)):
+                              if item.strip().isdigit(): allowed.add(int(item.strip()))
+                  selected = None
+                  for candidate in (8008, 8009, 8080, 8443):
+                      if candidate not in allowed: continue
+                      try:
+                          with socket.socket() as probe: probe.bind(('127.0.0.1', candidate))
+                          selected = candidate
+                          break
+                      except OSError: pass
+                  if selected is None:
+                      raise SystemExit('preview_available_policy_port=false; live_cutover=false')
+                  port = selected
+              print('preview_policy_compatible=true; security_policy_changed=false')
+              for parent in (root, root.parent, root.parent.parent): parent.chmod(0o755)
+              subprocess.run(['restorecon', '-RF', str(root.parent.parent)], check=True, capture_output=True)
               config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-preview.conf')
               desired = ('server {\n'
-                         '    listen 127.0.0.1:18081;\n'
+                         '    listen 127.0.0.1:' + str(port) + ';\n'
                          '    server_name localhost;\n'
                          '    root ' + str(root) + ';\n'
                          '    index index.html;\n'
@@ -93,10 +120,12 @@ jobs:
                          '    location / { try_files $uri $uri/ /index.html; }\n'
                          '}\n')
               previous = config.read_bytes() if config.exists() else None
-              if previous is not None and b'listen 127.0.0.1:18081;' not in previous:
+              if previous is not None and (b'listen 127.0.0.1:' not in previous or b'rsc-outreach/releases/' not in previous):
                   raise SystemExit('preview_config_conflict=true')
               try:
                   config.write_text(desired)
+                  config.chmod(0o644)
+                  subprocess.run(['restorecon', '-F', str(config)], check=True, capture_output=True)
                   check = subprocess.run(['nginx','-T'], capture_output=True)
                   if check.returncode: raise RuntimeError('nginx_validation')
                   loaded = str(config).encode() in check.stdout
@@ -105,13 +134,13 @@ jobs:
                   subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
                   for attempt in range(10):
                       try:
-                          with urllib.request.urlopen('http://127.0.0.1:18081/revision.txt', timeout=2) as response:
+                          with urllib.request.urlopen('http://127.0.0.1:' + str(port) + '/revision.txt', timeout=2) as response:
                               assert response.read().decode().strip() == revision
                           break
                       except (OSError, AssertionError):
                           if attempt == 9: raise
                           time.sleep(1)
-                  with urllib.request.urlopen('http://127.0.0.1:18081/', timeout=10) as response:
+                  with urllib.request.urlopen('http://127.0.0.1:' + str(port) + '/', timeout=10) as response:
                       assert response.status == 200 and b'<html' in response.read().lower()
                   saved = json.loads(receipt.read_text())
                   saved['loopback_preview_verified'] = True
