@@ -82,7 +82,7 @@ jobs:
               receipt.chmod(0o600)
               print('release_staged=true; revision=' + revision + '; live_cutover=false')
 
-              import subprocess, urllib.request
+              import subprocess, urllib.request, time
               config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-preview.conf')
               desired = ('server {\n'
                          '    listen 127.0.0.1:18081;\n'
@@ -100,8 +100,14 @@ jobs:
                   check = subprocess.run(['nginx','-t'], capture_output=True)
                   if check.returncode: raise RuntimeError('nginx_validation')
                   subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
-                  with urllib.request.urlopen('http://127.0.0.1:18081/revision.txt', timeout=10) as response:
-                      assert response.read().decode().strip() == revision
+                  for attempt in range(10):
+                      try:
+                          with urllib.request.urlopen('http://127.0.0.1:18081/revision.txt', timeout=2) as response:
+                              assert response.read().decode().strip() == revision
+                          break
+                      except (OSError, AssertionError):
+                          if attempt == 9: raise
+                          time.sleep(1)
                   with urllib.request.urlopen('http://127.0.0.1:18081/', timeout=10) as response:
                       assert response.status == 200 and b'<html' in response.read().lower()
                   saved = json.loads(receipt.read_text())
@@ -110,7 +116,11 @@ jobs:
                   receipt.write_text(json.dumps(saved))
                   receipt.chmod(0o600)
                   print('loopback_preview_verified=true; public_dns_changed=false')
-              except Exception:
+              except Exception as error:
+                  failure = private / 'outreach-preview-failure.txt'
+                  failure.write_text(type(error).__name__ + ': ' + str(error))
+                  failure.chmod(0o600)
+                  print('preview_error_class=' + type(error).__name__)
                   if previous is None: config.unlink(missing_ok=True)
                   else: config.write_bytes(previous)
                   subprocess.run(['nginx','-t'], capture_output=True, check=True)
