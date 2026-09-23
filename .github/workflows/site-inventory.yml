@@ -1,0 +1,83 @@
+name: Private VPS website inventory
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/site-inventory.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: rsc-site-inventory
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 5
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+    steps:
+      - name: Store private inventory on VPS; emit only status
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh/bridgeghl-mcp"
+          p.write_text(raw + "\n")
+          p.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/bridgeghl-mcp >/dev/null
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -o LogLevel=ERROR -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
+          import subprocess, json, re, os, tempfile, datetime
+          from pathlib import Path
+          try:
+              result = subprocess.run(['nginx', '-T'], capture_output=True, text=True, timeout=20)
+              if result.returncode:
+                  print('inventory_verified=false; reason=nginx_unavailable')
+                  raise SystemExit(1)
+              records = []
+              source = None
+              for raw in result.stdout.splitlines():
+                  line = raw.strip()
+                  if line.startswith('# configuration file ') and line.endswith(':'):
+                      source = line[len('# configuration file '):-1]
+                  match = re.fullmatch(r'(server_name|listen|root|index)\s+([^;{}]+);', line)
+                  if match:
+                      records.append(dict(source=source, directive=match.group(1), value=match.group(2)))
+                  match = re.fullmatch(r'proxy_pass\s+(https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?)/?;', line)
+                  if match:
+                      records.append(dict(source=source, directive='proxy_pass', value=match.group(1)))
+              directory = Path('/var/lib/rsc-ops')
+              directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+              directory.chmod(0o700)
+              report = dict(observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), records=records,
+                            scope='nginx route directives only; no environment, credentials, headers or customer data')
+              fd, name = tempfile.mkstemp(dir=directory, prefix='.inventory-')
+              with os.fdopen(fd, 'w') as stream:
+                  json.dump(report, stream, indent=2)
+                  stream.flush()
+                  os.fsync(stream.fileno())
+              os.chmod(name, 0o600)
+              os.replace(name, directory / 'website-inventory.json')
+              saved = json.loads((directory / 'website-inventory.json').read_text())
+              assert saved == report
+              print('inventory_verified=true; custody=vps_root_only; raw_log_export=false')
+              for domain in ('restoration-mt.com', 'restorationsecurityconsultants.com', 'restorationsecurityoutreach.com'):
+                  present = any(r['directive']=='server_name' and domain in r['value'].split() for r in records)
+                  print(domain + '_vhost_present=' + str(present).lower())
+          except Exception:
+              print('inventory_verified=false; detail_retained_on_host=false')
+              raise SystemExit(1)
+          PY
+      - name: Remove SSH material
+        if: always()
+        run: rm -f ~/.ssh/bridgeghl-mcp
