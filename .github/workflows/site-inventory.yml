@@ -79,40 +79,15 @@ jobs:
               preview_denied = any('18081' in line and ('Permission denied' in line or '13:' in line) for line in diagnostic_lines)
               _, sockets = probe(['ss', '-ltnp'])
               import shutil
-              pid_match = re.search(r'^MainPID=(\\d+)
-              print('preview_bind_permission_denied=' + str(preview_denied).lower())
-              print('selinux_enforcing=' + str(enforcement == 'Enforcing').lower())
-              report = dict(observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), records=records,
-                            runtime_evidence=runtime_evidence, scope='nginx routes, service paths and bind diagnostics; no environment, credentials, headers or request data')
-              fd, name = tempfile.mkstemp(dir=directory, prefix='.inventory-')
-              with os.fdopen(fd, 'w') as stream:
-                  json.dump(report, stream, indent=2)
-                  stream.flush()
-                  os.fsync(stream.fileno())
-              os.chmod(name, 0o600)
-              os.replace(name, directory / 'website-inventory.json')
-              saved = json.loads((directory / 'website-inventory.json').read_text())
-              assert saved == report
-              print('inventory_verified=true; custody=vps_root_only; raw_log_export=false')
-              for domain in ('restoration-mt.com', 'restorationsecurityconsultants.com', 'restorationsecurityoutreach.com'):
-                  present = any(r['directive']=='server_name' and domain in r['value'].split() for r in records)
-                  print(domain + '_vhost_present=' + str(present).lower())
-          except Exception:
-              print('inventory_verified=false; detail_retained_on_host=false')
-              raise SystemExit(1)
-          PY
-      - name: Remove SSH material
-        if: always()
-        run: rm -f ~/.ssh/bridgeghl-mcp
-, unit, re.MULTILINE)
+              pid_match = re.search(r'^MainPID=(\d+)$', unit, re.MULTILINE)
               main_pid = int(pid_match.group(1)) if pid_match else 0
               main_exe = os.readlink('/proc/' + str(main_pid) + '/exe') if main_pid else ''
-              main_command = Path('/proc/' + str(main_pid) + '/cmdline').read_bytes().replace(b'\\x00', b' ').decode(errors='replace') if main_pid else ''
+              main_command = Path('/proc/' + str(main_pid) + '/cmdline').read_bytes().replace(b'\x00', b' ').decode(errors='replace') if main_pid else ''
               executable_matches = main_exe == os.path.realpath(shutil.which('nginx') or '')
               print('nginx_running_executable_matches_cli=' + str(executable_matches).lower())
               print('nginx_running_custom_config=' + str(' -c ' in main_command).lower())
               print('nginx_running_custom_prefix=' + str(' -p ' in main_command).lower())
-              print('nginx_configured_error_logs_found=' + str(bool(re.findall(r'^\\s*error_log\\s+(/var/log/nginx/[^;\\s]+)', result.stdout, re.MULTILINE))).lower())
+              print('nginx_configured_error_logs_found=' + str(bool(re.findall(r'^\s*error_log\s+(/var/log/nginx/[^;\s]+)', result.stdout, re.MULTILINE))).lower())
               preview_failure = directory / 'outreach-preview-failure.txt'
               print('preview_failure_record_exists=' + str(preview_failure.exists()).lower())
               runtime_evidence = dict(selinux=enforcement, nginx_unit=unit, master_executable=main_exe, master_command=main_command, bind_errors=diagnostic_lines, listening_sockets=sockets)
