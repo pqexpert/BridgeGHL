@@ -1,0 +1,89 @@
+name: Stage RSC outreach on IONOS
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/stage-rsc-outreach.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 12
+    steps:
+      - name: Fetch approved website revision
+        uses: actions/checkout@v4
+        with:
+          repository: pqexpert/rsc-operations-console
+          ref: 6a9d9fa768dddd0ae97e51462cf9bd3f52148382
+          token: ${{ secrets.GIT_PAT }}
+          persist-credentials: false
+          sparse-checkout: web/outreach
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build static website without exporting private source
+        working-directory: web/outreach
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! npm ci > /tmp/rsc-build.log 2>&1; then echo "dependency_install=false; details_withheld=true"; exit 1; fi
+          if ! npm run build >> /tmp/rsc-build.log 2>&1; then echo "static_build=false; details_withheld=true"; exit 1; fi
+          test -s dist/index.html
+          printf '%s\n' '6a9d9fa768dddd0ae97e51462cf9bd3f52148382' > dist/revision.txt
+          tar -czf /tmp/rsc-outreach.tar.gz -C dist .
+          echo "static_build=true"
+      - name: Stage immutable release through existing VPS transport
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+          if "PRIVATE KEY" not in raw:
+              raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+          p = Path.home() / ".ssh/rsc-stage"
+          p.write_text(raw + "\n")
+          p.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/rsc-stage >/dev/null 2>&1
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
+          test -s ~/.ssh/rsc-hosts
+          scp -q -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage /tmp/rsc-outreach.tar.gz "$REMOTE_USER@$REMOTE_HOST:/tmp/rsc-outreach-6a9d9fa.tar.gz"
+          ssh -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
+          import tarfile, pathlib, hashlib, json, os, datetime
+          revision = '6a9d9fa768dddd0ae97e51462cf9bd3f52148382'
+          archive = pathlib.Path('/tmp/rsc-outreach-6a9d9fa.tar.gz')
+          root = pathlib.Path('/var/www/rsc-outreach/releases') / revision
+          try:
+              root.mkdir(parents=True, exist_ok=True)
+              with tarfile.open(archive) as tar:
+                  tar.extractall(root, filter='data')
+              assert (root / 'revision.txt').read_text().strip() == revision
+              assert (root / 'index.html').stat().st_size > 0
+              for file in root.rglob('*'):
+                  if file.is_file(): file.chmod(0o644)
+                  elif file.is_dir(): file.chmod(0o755)
+              private = pathlib.Path('/var/lib/rsc-ops')
+              private.mkdir(parents=True, exist_ok=True, mode=0o700)
+              private.chmod(0o700)
+              receipt = private / 'outreach-stage.json'
+              receipt.write_text(json.dumps(dict(revision=revision, release=str(root), index_sha256=hashlib.sha256((root/'index.html').read_bytes()).hexdigest(), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), live_cutover=False)))
+              receipt.chmod(0o600)
+              print('release_staged=true; revision=' + revision + '; live_cutover=false')
+          finally:
+              archive.unlink(missing_ok=True)
+          PY
+      - name: Remove temporary credentials and build material
+        if: always()
+        run: rm -f ~/.ssh/rsc-stage ~/.ssh/rsc-hosts /tmp/rsc-outreach.tar.gz /tmp/rsc-build.log
