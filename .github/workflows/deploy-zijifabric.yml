@@ -53,8 +53,35 @@ jobs:
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           umask 077
-          printf '%s' "$HIGHLEVEL_PIT" > highlevel.pit
-          printf '%s' "$HIGHLEVEL_LOCATION_ID" > highlevel.location
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          pit = os.environ["HIGHLEVEL_PIT"].strip()
+          if len(pit) > 1 and pit[0] == pit[-1] and pit[0] in ("'", '"'):
+              pit = pit[1:-1].strip()
+          if pit.lower().startswith("bearer "):
+              pit = pit[7:].strip()
+          location = os.environ["HIGHLEVEL_LOCATION_ID"].strip()
+          if not pit or any(ch.isspace() for ch in pit) or not location or any(ch.isspace() for ch in location):
+              raise SystemExit("Invalid protected credential transport format")
+          Path("highlevel.pit").write_text(pit)
+          Path("highlevel.location").write_text(location)
+          PY
+
+      - name: Verify protected HighLevel provider credential before VPS mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          HIGHLEVEL_PIT=$(cat highlevel.pit)
+          HIGHLEVEL_LOCATION_ID=$(cat highlevel.location)
+          status=$(curl --silent --show-error --output provider-response.json --write-out '%{http_code}' \
+            --request GET "https://services.leadconnectorhq.com/opportunities/pipelines?locationId=${HIGHLEVEL_LOCATION_ID}" \
+            --header "Authorization: Bearer ${HIGHLEVEL_PIT}" \
+            --header "Accept: application/json" \
+            --header "Version: 2021-07-28")
+          echo "HighLevel provider HTTP status: $status"
+          test "$status" = "200" || { echo "::error::HighLevel provider rejected protected binding (HTTP $status)"; exit 1; }
+          rm -f provider-response.json
 
       - name: Migrate binding, restart, and verify
         shell: bash
@@ -74,9 +101,11 @@ jobs:
           privilege=()
           if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
 
-          source_env=$(ls -1t "$old_env".rollback.* 2>/dev/null | head -n 1)
-          if [[ -z "${source_env:-}" ]]; then source_env="$old_env"; fi
-          test -s "$source_env"
+          if ! "${privilege[@]}" test -s "$new_env"; then
+            test -s "$old_env" || { echo "No current or legacy service environment"; exit 1; }
+            "${privilege[@]}" install -d -m 700 -o root -g root "$new_dir"
+            "${privilege[@]}" install -m 600 -o root -g root "$old_env" "$new_env"
+          fi
           test -s "$PIT_FILE"
           test -s "$LOCATION_FILE"
 
@@ -85,7 +114,6 @@ jobs:
             "${privilege[@]}" cp -a "$new_env" "$new_env.rollback.$stamp"
           fi
           "${privilege[@]}" cp -a "$unit" "$unit.rollback.$stamp"
-          "${privilege[@]}" install -m 600 -o root -g root "$source_env" "$new_env"
 
           "${privilege[@]}" python3 - "$new_env" "$PIT_FILE" "$LOCATION_FILE" <<'PY'
           from pathlib import Path
@@ -130,7 +158,8 @@ jobs:
           "${privilege[@]}" systemctl restart bridgeghl.service
           "${privilege[@]}" systemctl is-active --quiet bridgeghl.service
           for attempt in {1..15}; do
-            if curl --silent --show-error http://127.0.0.1:8000/health; then
+            if curl --silent --show-error --fail --output /tmp/bridgeghl-health.json http://127.0.0.1:8000/health && python3 -c 'import json; assert json.load(open("/tmp/bridgeghl-health.json"))["state"] == "HEALTHY"'; then
+              rm -f /tmp/bridgeghl-health.json
               exit 0
             fi
             sleep 1
@@ -139,30 +168,6 @@ jobs:
           "${privilege[@]}" journalctl -u bridgeghl.service --no-pager -n 50 || true
           exit 1
           REMOTE
-
-      - name: Verify HighLevel provider authentication
-        shell: bash
-        run: |
-          set -euo pipefail
-          status=$(curl --silent --show-error --output provider-response.json --write-out '%{http_code}' \
-            --request GET "https://services.leadconnectorhq.com/opportunities/pipelines?locationId=${HIGHLEVEL_LOCATION_ID}" \
-            --header "Authorization: Bearer ${HIGHLEVEL_PIT}" \
-            --header "Accept: application/json" \
-            --header "Version: 2021-07-28")
-          echo "HighLevel provider HTTP status: $status"
-          if [[ "$status" != "200" ]]; then
-            python3 - <<'PY'
-          import json
-          from pathlib import Path
-          try:
-              body = json.loads(Path("provider-response.json").read_text())
-              print({"statusCode": body.get("statusCode"), "message": body.get("message")})
-          except Exception:
-              print("Provider returned a non-JSON error body")
-          PY
-            exit 1
-          fi
-          rm -f provider-response.json
 
       - name: Remove runner secret material
         if: always()
