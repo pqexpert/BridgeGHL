@@ -81,6 +81,42 @@ jobs:
               receipt.write_text(json.dumps(dict(revision=revision, release=str(root), index_sha256=hashlib.sha256((root/'index.html').read_bytes()).hexdigest(), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), live_cutover=False)))
               receipt.chmod(0o600)
               print('release_staged=true; revision=' + revision + '; live_cutover=false')
+
+              import subprocess, urllib.request
+              config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-preview.conf')
+              desired = ('server {\n'
+                         '    listen 127.0.0.1:18081;\n'
+                         '    server_name localhost;\n'
+                         '    root ' + str(root) + ';\n'
+                         '    index index.html;\n'
+                         '    add_header X-Robots-Tag "noindex, nofollow" always;\n'
+                         '    location / { try_files $uri $uri/ /index.html; }\n'
+                         '}\n')
+              previous = config.read_bytes() if config.exists() else None
+              if previous is not None and b'listen 127.0.0.1:18081;' not in previous:
+                  raise SystemExit('preview_config_conflict=true')
+              try:
+                  config.write_text(desired)
+                  check = subprocess.run(['nginx','-t'], capture_output=True)
+                  if check.returncode: raise RuntimeError('nginx_validation')
+                  subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
+                  with urllib.request.urlopen('http://127.0.0.1:18081/revision.txt', timeout=10) as response:
+                      assert response.read().decode().strip() == revision
+                  with urllib.request.urlopen('http://127.0.0.1:18081/', timeout=10) as response:
+                      assert response.status == 200 and b'<html' in response.read().lower()
+                  saved = json.loads(receipt.read_text())
+                  saved['loopback_preview_verified'] = True
+                  saved['preview_config'] = str(config)
+                  receipt.write_text(json.dumps(saved))
+                  receipt.chmod(0o600)
+                  print('loopback_preview_verified=true; public_dns_changed=false')
+              except Exception:
+                  if previous is None: config.unlink(missing_ok=True)
+                  else: config.write_bytes(previous)
+                  subprocess.run(['nginx','-t'], capture_output=True, check=True)
+                  subprocess.run(['systemctl','reload','nginx'], capture_output=True, check=True)
+                  raise SystemExit('preview_failed=true; prior_config_restored=true')
+
           finally:
               archive.unlink(missing_ok=True)
           PY
