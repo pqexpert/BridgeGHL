@@ -20,10 +20,10 @@ jobs:
     env:
       TARGET_DOMAIN: restorationsecurityoutreach.com
       TARGET_WWW: www.restorationsecurityoutreach.com
-      IONOS_API_KEY: \${{ secrets.IONOS_API_KEY }}
-      REMOTE_HOST: \${{ secrets.BRIDGEGHL_VPS_IP }}
-      REMOTE_USER: \${{ secrets.BRIDGEGHL_VPS_USER }}
-      SSH_PRIVATE_KEY: \${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      IONOS_API_KEY: ${{ secrets.IONOS_API_KEY }}
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
     steps:
       - name: Prepare protected evidence custody
         shell: bash
@@ -295,6 +295,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${BACKUP_DIR:-}" ] || [ ! -f "$HOME/.ssh/rsc-dns-recovery" ] || [ ! -s "$HOME/.ssh/rsc-hosts" ]; then
+            echo "post_state_persist_skipped=true; custody_not_prepared=true"
+            exit 0
+          fi
           for item in /tmp/rsc-outreach-dns-after.json /tmp/rsc-outreach-dns-recovery-receipt.json; do
             if [ -f "$item" ]; then
               name=$(basename "$item")
