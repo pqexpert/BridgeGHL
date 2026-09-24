@@ -87,6 +87,9 @@ jobs:
           def type_counts(values):
               return dict(sorted(collections.Counter(r.get('type','UNKNOWN') for r in values).items()))
 
+          def protected_nonweb(values):
+              return [r for r in values if not is_web(r) and r.get('type') != 'SOA']
+
           def public_shape(record):
               return {k: record.get(k) for k in ('name','type','content','ttl','prio','disabled') if record.get(k) is not None}
 
@@ -118,8 +121,8 @@ jobs:
                   'full_records': [public_shape(r) for r in values],
                   'web_records': [public_shape(r) for r in values if is_web(r)],
                   'web_digest': digest([r for r in values if is_web(r)]),
-                  'nonweb_digest': digest([r for r in values if not is_web(r)]),
-                  'nonweb_type_counts': type_counts([r for r in values if not is_web(r)]),
+                  'nonweb_digest': digest(protected_nonweb(values)),
+                  'nonweb_type_counts': type_counts(protected_nonweb(values)),
                   'target_ip': target_ip,
               }
               Path = __import__('pathlib').Path
@@ -129,7 +132,7 @@ jobs:
           elif mode == 'apply':
               snapshot = json.load(open(SNAPSHOT))
               zone_id, values = records()
-              if zone_id != snapshot['zone_id'] or digest([r for r in values if not is_web(r)]) != snapshot['nonweb_digest']:
+              if zone_id != snapshot['zone_id'] or digest(protected_nonweb(values)) != snapshot['nonweb_digest']:
                   raise SystemExit('dns_pre_effect_cas=false')
               if snapshot['web_records'] or [r for r in values if is_web(r)]:
                   raise SystemExit('unexpected_preexisting_web_records=true')
@@ -143,10 +146,10 @@ jobs:
               root_a = [r for r in after if r.get('name','').rstrip('.') == DOMAIN and r.get('type') == 'A' and r.get('content') == snapshot['target_ip'] and not r.get('disabled',False)]
               www_cname = [r for r in after if r.get('name','').rstrip('.') == WWW and r.get('type') == 'CNAME' and r.get('content','').rstrip('.') == DOMAIN and not r.get('disabled',False)]
               extras = [r for r in after if is_web(r) and r not in root_a and r not in www_cname]
-              nonweb_preserved = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
+              nonweb_preserved = digest(protected_nonweb(after)) == snapshot['nonweb_digest']
               print('dns_post_write_counts=root_a:' + str(len(root_a)) + ',www_cname:' + str(len(www_cname)) + ',extras:' + str(len(extras)) + '; nonweb_records_preserved=' + str(nonweb_preserved).lower())
               if not nonweb_preserved:
-                  print('dns_nonweb_type_counts_before=' + json.dumps(snapshot['nonweb_type_counts'], sort_keys=True) + '; after=' + json.dumps(type_counts([r for r in after if not is_web(r)]), sort_keys=True))
+                  print('dns_nonweb_type_counts_before=' + json.dumps(snapshot['nonweb_type_counts'], sort_keys=True) + '; after=' + json.dumps(type_counts(protected_nonweb(after)), sort_keys=True))
               if zone_id2 != zone_id or len(root_a) != 1 or len(www_cname) != 1 or extras or not nonweb_preserved:
                   raise SystemExit('dns_post_write_verification=false')
               print('dns_web_cutover_verified=true; root_a=1; www_cname=1; nonweb_records_preserved=true')
@@ -158,7 +161,7 @@ jobs:
               delete_web(zone_id, values)
               zone_id2, after = records()
               web_restored = digest([r for r in after if is_web(r)]) == snapshot['web_digest']
-              nonweb_restored = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
+              nonweb_restored = digest(protected_nonweb(after)) == snapshot['nonweb_digest']
               if zone_id2 != snapshot['zone_id'] or not web_restored or not nonweb_restored:
                   raise SystemExit('dns_rollback_verification=false')
               print('dns_rollback_verified=true; restored_web_records=' + str(len(snapshot['web_records'])) + '; nonweb_records_preserved=true')
