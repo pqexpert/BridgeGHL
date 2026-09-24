@@ -1,0 +1,55 @@
+name: Connect approved HighLevel go subdomain
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/connect-highlevel-go.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  connect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 8
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      IONOS_API_KEY: ${{ secrets.IONOS_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate isolated CNAME controls
+        run: python3 -m unittest discover -s tests -p test_rsc_go_dns.py -v
+      - name: Prepare existing protected transport and durable private custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ['SSH_PRIVATE_KEY'].strip().replace('\\n', '\n')
+          if 'PRIVATE KEY' not in raw:
+              raw = base64.b64decode(''.join(raw.split()), validate=True).decode().strip()
+          key = Path.home() / '.ssh/rsc-cutover'
+          key.write_text(raw + '\n')
+          key.chmod(0o600)
+          PY
+          ssh-keygen -y -f ~/.ssh/rsc-cutover >/dev/null 2>&1
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
+          test -s ~/.ssh/rsc-hosts
+          BACKUP_DIR="/var/lib/rsc-ops/cutovers/outreach-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "BACKUP_DIR=$BACKUP_DIR" >> "$GITHUB_ENV"
+          ssh -o LogLevel=ERROR -o UserKnownHostsFile="$HOME/.ssh/rsc-hosts" -o StrictHostKeyChecking=yes -i "$HOME/.ssh/rsc-cutover" "$REMOTE_USER@$REMOTE_HOST" "sudo -n install -d -m 700 -o root -g root '$BACKUP_DIR'"
+
+
+      - name: Apply only approved go CNAME and verify preservation
+        run: python3 scripts/rsc_go_dns.py
+      - name: Remove runner secret copies
+        if: always()
+        run: rm -f ~/.ssh/rsc-cutover ~/.ssh/rsc-hosts
