@@ -88,7 +88,14 @@ jobs:
               return {k: record.get(k) for k in ('name','type','content','ttl','prio','disabled') if record.get(k) is not None}
 
           def digest(values):
-              shaped = sorted((r.get('name'), r.get('type'), r.get('content'), r.get('ttl'), r.get('prio'), r.get('disabled')) for r in values)
+              shaped = sorted((
+                  r.get('name','').rstrip('.'),
+                  r.get('type'),
+                  r.get('content','').rstrip('.') if r.get('type') in {'CNAME','MX','NS'} else r.get('content'),
+                  int(r.get('ttl', 3600)),
+                  int(r.get('prio', 0)),
+                  bool(r.get('disabled', False)),
+              ) for r in values)
               return hashlib.sha256(json.dumps(shaped, separators=(',',':')).encode()).hexdigest()
 
           mode = sys.argv[1]
@@ -99,6 +106,7 @@ jobs:
                   'zone_id': zone_id,
                   'full_records': [public_shape(r) for r in values],
                   'web_records': [public_shape(r) for r in values if is_web(r)],
+                  'web_digest': digest([r for r in values if is_web(r)]),
                   'nonweb_digest': digest([r for r in values if not is_web(r)]),
                   'target_ip': target_ip,
               }
@@ -121,7 +129,9 @@ jobs:
               root_a = [r for r in after if r.get('name','').rstrip('.') == DOMAIN and r.get('type') == 'A' and r.get('content') == snapshot['target_ip'] and not r.get('disabled',False)]
               www_cname = [r for r in after if r.get('name','').rstrip('.') == WWW and r.get('type') == 'CNAME' and r.get('content','').rstrip('.') == DOMAIN and not r.get('disabled',False)]
               extras = [r for r in after if is_web(r) and r not in root_a and r not in www_cname]
-              if zone_id2 != zone_id or len(root_a) != 1 or len(www_cname) != 1 or extras or digest([r for r in after if not is_web(r)]) != snapshot['nonweb_digest']:
+              nonweb_preserved = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
+              print('dns_post_write_counts=root_a:' + str(len(root_a)) + ',www_cname:' + str(len(www_cname)) + ',extras:' + str(len(extras)) + '; nonweb_records_preserved=' + str(nonweb_preserved).lower())
+              if zone_id2 != zone_id or len(root_a) != 1 or len(www_cname) != 1 or extras or not nonweb_preserved:
                   raise SystemExit('dns_post_write_verification=false')
               print('dns_web_cutover_verified=true; root_a=1; www_cname=1; nonweb_records_preserved=true')
           elif mode == 'rollback':
@@ -131,7 +141,9 @@ jobs:
               zone_id, _ = records()
               request('PUT', '/zones/' + zone_id, snapshot['full_records'])
               zone_id2, after = records()
-              if zone_id2 != snapshot['zone_id'] or digest([r for r in after if not is_web(r)]) != snapshot['nonweb_digest']:
+              web_restored = digest([r for r in after if is_web(r)]) == snapshot['web_digest']
+              nonweb_restored = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
+              if zone_id2 != snapshot['zone_id'] or not web_restored or not nonweb_restored:
                   raise SystemExit('dns_rollback_verification=false')
               print('dns_rollback_verified=true; restored_web_records=' + str(len(snapshot['web_records'])) + '; nonweb_records_preserved=true')
           else:
