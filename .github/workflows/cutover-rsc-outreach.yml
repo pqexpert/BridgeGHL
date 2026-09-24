@@ -98,6 +98,14 @@ jobs:
               ) for r in values)
               return hashlib.sha256(json.dumps(shaped, separators=(',',':')).encode()).hexdigest()
 
+          def create(zone_id, values):
+              return request('POST', '/zones/' + zone_id + '/records', values)
+
+          def delete_web(zone_id, values):
+              for record in values:
+                  if is_web(record):
+                      request('DELETE', '/zones/' + zone_id + '/records/' + record['id'])
+
           mode = sys.argv[1]
           if mode == 'snapshot':
               zone_id, values = records()
@@ -119,12 +127,14 @@ jobs:
               zone_id, values = records()
               if zone_id != snapshot['zone_id'] or digest([r for r in values if not is_web(r)]) != snapshot['nonweb_digest']:
                   raise SystemExit('dns_pre_effect_cas=false')
-              replacement = [public_shape(r) for r in values if not is_web(r)] + [
+              if snapshot['web_records'] or [r for r in values if is_web(r)]:
+                  raise SystemExit('unexpected_preexisting_web_records=true')
+              desired = [
                   {'name':DOMAIN,'type':'A','content':snapshot['target_ip'],'ttl':300,'prio':0,'disabled':False},
                   {'name':WWW,'type':'CNAME','content':DOMAIN,'ttl':300,'prio':0,'disabled':False},
               ]
               __import__('pathlib').Path('/tmp/rsc-outreach-dns-mutated').touch(mode=0o600)
-              request('PUT', '/zones/' + zone_id, replacement)
+              create(zone_id, desired)
               zone_id2, after = records()
               root_a = [r for r in after if r.get('name','').rstrip('.') == DOMAIN and r.get('type') == 'A' and r.get('content') == snapshot['target_ip'] and not r.get('disabled',False)]
               www_cname = [r for r in after if r.get('name','').rstrip('.') == WWW and r.get('type') == 'CNAME' and r.get('content','').rstrip('.') == DOMAIN and not r.get('disabled',False)]
@@ -138,8 +148,8 @@ jobs:
               if not os.path.exists(SNAPSHOT):
                   print('dns_rollback_snapshot_missing=true'); raise SystemExit(0)
               snapshot = json.load(open(SNAPSHOT))
-              zone_id, _ = records()
-              request('PUT', '/zones/' + zone_id, snapshot['full_records'])
+              zone_id, values = records()
+              delete_web(zone_id, values)
               zone_id2, after = records()
               web_restored = digest([r for r in after if is_web(r)]) == snapshot['web_digest']
               nonweb_restored = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
