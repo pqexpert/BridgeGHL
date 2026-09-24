@@ -1,4 +1,4 @@
-name: Inspect RSC outreach public ingress
+name: Cut over approved RSC outreach HTTPS
 
 on:
   workflow_dispatch:
@@ -14,16 +14,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  inspect:
+  cutover:
     runs-on: ubuntu-latest
     environment: zijifabric
-    timeout-minutes: 5
+    timeout-minutes: 20
     env:
+      TARGET_DOMAIN: restorationsecurityoutreach.com
+      TARGET_WWW: www.restorationsecurityoutreach.com
+      TARGET_REVISION: b2feed67d768d0e29e498b8af6189bb6b23850f9
+      CONTACT_EMAIL: inquiries@mg.restorationsecurityoutreach.com
       REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
       REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
       SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+      IONOS_API_KEY: ${{ secrets.IONOS_API_KEY }}
     steps:
-      - name: Prepare protected transport
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify record recovery controls locally
+        run: python3 -m unittest discover -s tests -p test_rsc_outreach_cutover.py -v
+      - name: Prepare existing protected transport and durable private custody
         shell: bash
         run: |
           set -euo pipefail
@@ -34,47 +44,346 @@ jobs:
           raw = os.environ['SSH_PRIVATE_KEY'].strip().replace('\\n', '\n')
           if 'PRIVATE KEY' not in raw:
               raw = base64.b64decode(''.join(raw.split()), validate=True).decode().strip()
-          key = Path.home() / '.ssh/rsc-ingress-inspect'
+          key = Path.home() / '.ssh/rsc-cutover'
           key.write_text(raw + '\n')
           key.chmod(0o600)
           PY
-          ssh-keygen -y -f ~/.ssh/rsc-ingress-inspect >/dev/null 2>&1
+          ssh-keygen -y -f ~/.ssh/rsc-cutover >/dev/null 2>&1
           ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
           test -s ~/.ssh/rsc-hosts
+          BACKUP_DIR="/var/lib/rsc-ops/cutovers/outreach-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "BACKUP_DIR=$BACKUP_DIR" >> "$GITHUB_ENV"
+          ssh -o LogLevel=ERROR -o UserKnownHostsFile="$HOME/.ssh/rsc-hosts" -o StrictHostKeyChecking=yes -i "$HOME/.ssh/rsc-cutover" "$REMOTE_USER@$REMOTE_HOST" "sudo -n install -d -m 700 -o root -g root '$BACKUP_DIR'"
 
-      - name: Read host ingress state without mutation
+      - name: Public cutover with automatic rollback
         shell: bash
         run: |
           set -euo pipefail
-          ssh -o LogLevel=ERROR -o UserKnownHostsFile="$HOME/.ssh/rsc-hosts" -o StrictHostKeyChecking=yes -i "$HOME/.ssh/rsc-ingress-inspect" "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
-          import subprocess
-          def active(unit):
-              return subprocess.run(['systemctl','is-active','--quiet',unit]).returncode == 0
-          firewalld = active('firewalld')
-          http_runtime = False
-          https_runtime = False
-          http_permanent = False
-          https_permanent = False
-          if firewalld:
-              http_runtime = subprocess.run(['firewall-cmd','--query-service=http'], capture_output=True).returncode == 0
-              https_runtime = subprocess.run(['firewall-cmd','--query-service=https'], capture_output=True).returncode == 0
-              http_permanent = subprocess.run(['firewall-cmd','--permanent','--query-service=http'], capture_output=True).returncode == 0
-              https_permanent = subprocess.run(['firewall-cmd','--permanent','--query-service=https'], capture_output=True).returncode == 0
-          sockets = subprocess.run(['ss','-ltnH'], capture_output=True, text=True, check=True).stdout.splitlines()
-          port80 = any(line.split()[3].rsplit(':',1)[-1] == '80' for line in sockets if len(line.split()) >= 4)
-          port443 = any(line.split()[3].rsplit(':',1)[-1] == '443' for line in sockets if len(line.split()) >= 4)
-          print('ingress_readback=true')
-          print('nginx_active=' + str(active('nginx')).lower())
-          print('firewalld_active=' + str(firewalld).lower())
-          print('firewalld_http_runtime=' + str(http_runtime).lower())
-          print('firewalld_https_runtime=' + str(https_runtime).lower())
-          print('firewalld_http_permanent=' + str(http_permanent).lower())
-          print('firewalld_https_permanent=' + str(https_permanent).lower())
-          print('port80_listening=' + str(port80).lower())
-          print('port443_listening=' + str(port443).lower())
+          SSH=(ssh -o LogLevel=ERROR -o UserKnownHostsFile="$HOME/.ssh/rsc-hosts" -o StrictHostKeyChecking=yes -i "$HOME/.ssh/rsc-cutover" "$REMOTE_USER@$REMOTE_HOST")
+          rollback() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "cutover_failed=true; rollback_started=true"
+              if [ -f /tmp/rsc-outreach-dns-mutated ]; then
+                python3 scripts/rsc_outreach_dns.py rollback || echo "dns_rollback_failed=true"
+              else
+                echo "dns_rollback_not_needed=true; dns_mutation_started=false"
+              fi
+              "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' python3 -" <<'PY' || echo "nginx_rollback_failed=true"
+          import hashlib, json, pathlib, subprocess
+          state = pathlib.Path(__import__('os').environ['BACKUP_DIR']) / 'nginx-before.json'
+          if not state.exists():
+              print('nginx_rollback_state_missing=true')
+              raise SystemExit(0)
+          saved = json.loads(state.read_text())
+          config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-public.conf')
+          backup = pathlib.Path(saved['backup'])
+          if hashlib.sha256(backup.read_bytes()).hexdigest() != saved['before_sha']: raise SystemExit('nginx_backup_integrity_failed')
+          current = config.read_bytes() if config.exists() else b''
+          if hashlib.sha256(current).hexdigest() not in [saved['before_sha']] + saved['owned_shas']: raise SystemExit('nginx_rollback_concurrent_change')
+          if saved['prior_exists']:
+              config.write_bytes(backup.read_bytes())
+              config.chmod(0o644)
+          else:
+              config.unlink(missing_ok=True)
+          subprocess.run(['nginx','-t'], check=True, capture_output=True)
+          subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
+          renewal_backup = state.parent/'renewal-before.json'
+          if renewal_backup.exists():
+              import base64
+              renewal = json.loads(renewal_backup.read_text()); hook = pathlib.Path(renewal['hook'])
+              if hook.exists() and hashlib.sha256(hook.read_bytes()).hexdigest() != renewal['desired_sha']: raise SystemExit('renewal_rollback_conflict=true')
+              if renewal['prior'] is None: hook.unlink(missing_ok=True)
+              else: hook.write_bytes(base64.b64decode(renewal['prior']))
+              if not renewal['active']: subprocess.run(['systemctl','stop',renewal['timer']],check=True,capture_output=True)
+              if not renewal['enabled']: subprocess.run(['systemctl','disable',renewal['timer']],check=True,capture_output=True)
+          pathlib.Path('/var/lib/rsc-ops/outreach-cutover.json').unlink(missing_ok=True)
+          (state.parent / 'rollback-status.json').write_text(json.dumps({'nginx_rollback_verified':True,'live_cutover':False}))
+          (state.parent / 'rollback-status.json').chmod(0o600)
+          print('nginx_rollback_verified=true')
+          PY
+              "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' python3 - rollback" < scripts/rsc_outreach_ingress.py || echo "ingress_rollback_failed=true"
+              exit "$status"
+            fi
+          }
+          trap rollback EXIT
+
+          python3 scripts/rsc_outreach_dns.py snapshot
+
+          "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' TARGET_REVISION='$TARGET_REVISION' TARGET_DOMAIN='$TARGET_DOMAIN' TARGET_WWW='$TARGET_WWW' python3 -" <<'PY'
+          import datetime, hashlib, json, pathlib, subprocess, urllib.request
+          revision = __import__('os').environ['TARGET_REVISION']
+          domain = __import__('os').environ['TARGET_DOMAIN']
+          www = __import__('os').environ['TARGET_WWW']
+          stage = pathlib.Path('/var/lib/rsc-ops/outreach-stage.json')
+          if not stage.exists() or json.loads(stage.read_text()).get('revision') != revision:
+              raise SystemExit('staged_revision_cas=false')
+          release = pathlib.Path('/var/www/rsc-outreach/releases') / revision
+          if not (release / 'revision.txt').exists() or (release / 'revision.txt').read_text().strip() != revision:
+              raise SystemExit('release_revision_cas=false')
+          if not (release / 'index.html').exists(): raise SystemExit('release_index_missing=true')
+          config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-public.conf')
+          runtime = subprocess.run(['nginx','-T'], capture_output=True, text=True, check=True)
+          if not config.exists() and (domain in runtime.stdout or www in runtime.stdout):
+              raise SystemExit('public_vhost_conflict=true')
+          private = pathlib.Path(__import__('os').environ['BACKUP_DIR'])
+          private.mkdir(parents=True, exist_ok=True, mode=0o700)
+          private.chmod(0o700)
+          stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+          backup = private / 'nginx-before.conf'
+          prior_exists = config.exists()
+          backup.write_bytes(config.read_bytes() if prior_exists else b'')
+          backup.chmod(0o600)
+          state = private / 'nginx-before.json'
+          state.write_text(json.dumps({'prior_exists':prior_exists,'backup':str(backup),'revision':revision,'observed_at':stamp,'before_sha':hashlib.sha256(backup.read_bytes()).hexdigest(),'owned_shas':[]}))
+          state.chmod(0o600)
+          with backup.open('rb') as f: __import__('os').fsync(f.fileno())
+          with state.open('rb') as f: __import__('os').fsync(f.fileno())
+          assert json.loads(state.read_text())['before_sha'] == hashlib.sha256(backup.read_bytes()).hexdigest()
+          # Snapshot unrelated Nginx configuration; keep its contents private.
+          others = {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('/etc/nginx').rglob('*') if p.is_file() and p != config}
+          (private / 'nginx-protected.json').write_text(json.dumps(others))
+          (private / 'nginx-protected.json').chmod(0o600)
+          webroot = pathlib.Path('/var/www/letsencrypt')
+          webroot.mkdir(parents=True, exist_ok=True)
+          webroot.chmod(0o755)
+          challenge_probe = webroot / '.well-known/acme-challenge/rsc-cutover-preflight'
+          challenge_probe.parent.mkdir(parents=True, exist_ok=True)
+          challenge_probe.write_text('rsc-cutover-preflight\n')
+          challenge_probe.chmod(0o644)
+          desired = f'''server {{
+              listen 80;
+              server_name {domain} {www};
+              root {release};
+              index index.html;
+              location ^~ /.well-known/acme-challenge/ {{ root {webroot}; }}
+              location / {{ try_files $uri $uri/ /index.html; }}
+          }}
+          '''
+          try:
+              saved = json.loads(state.read_text())
+              current = config.read_bytes() if config.exists() else b''
+              if hashlib.sha256(current).hexdigest() != saved['before_sha']: raise RuntimeError('nginx_pre_effect_compare_failed')
+              saved['owned_shas'].append(hashlib.sha256(desired.encode()).hexdigest())
+              state.write_text(json.dumps(saved))
+              with state.open('rb') as f: __import__('os').fsync(f.fileno())
+              config.write_text(desired)
+              config.chmod(0o644)
+              subprocess.run(['restorecon','-F',str(config)], check=True, capture_output=True)
+              subprocess.run(['nginx','-t'], check=True, capture_output=True)
+              subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
+              loaded = subprocess.run(['nginx','-T'], capture_output=True, text=True, check=True).stdout
+              if str(release) not in loaded or ('server_name ' + domain + ' ' + www) not in loaded:
+                  raise RuntimeError('http_vhost_not_loaded')
+              print('http_vhost_prepared=true; staged_revision_verified=true; nginx_config_loaded=true; rollback_saved=true')
+          except Exception:
+              if prior_exists: config.write_bytes(backup.read_bytes())
+              else: config.unlink(missing_ok=True)
+              subprocess.run(['nginx','-t'], check=True, capture_output=True)
+              subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
+              raise
           PY
 
-      - name: Remove temporary credentials
+          "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' python3 - apply" < scripts/rsc_outreach_ingress.py
+          # Reach the intended host externally before changing public DNS.
+          for name in "$TARGET_DOMAIN" "$TARGET_WWW"; do
+            response=$(curl --noproxy '*' --fail --silent --show-error --max-time 20 --resolve "$name:80:$REMOTE_HOST" "http://$name/.well-known/acme-challenge/rsc-cutover-preflight")
+            test "$response" = rsc-cutover-preflight
+          done
+          echo "external_ipv4_ingress_verified=true; dns_mutation_started=false"
+          touch /tmp/rsc-outreach-dns-mutated
+          python3 scripts/rsc_outreach_dns.py apply
+
+          python3 - <<'PY'
+          import os, socket, time
+          target = socket.gethostbyname(os.environ['REMOTE_HOST'])
+          names = [os.environ['TARGET_DOMAIN'], os.environ['TARGET_WWW']]
+          for attempt in range(40):
+              ok = True
+              for name in names:
+                  try:
+                      addresses = {item[4][0] for item in socket.getaddrinfo(name, 80, family=socket.AF_INET)}
+                  except OSError:
+                      addresses = set()
+                  try:
+                      ipv6 = {item[4][0] for item in socket.getaddrinfo(name, 80, family=socket.AF_INET6)}
+                  except socket.gaierror as error:
+                      if error.errno not in (socket.EAI_NONAME, getattr(socket, 'EAI_NODATA', socket.EAI_NONAME)): raise
+                      ipv6 = set()
+                  ok = ok and addresses == {target} and not ipv6
+              if ok:
+                  print('public_dns_resolution_verified=true; attempts=' + str(attempt + 1))
+                  break
+              if attempt == 39: raise SystemExit('public_dns_resolution_timeout=true')
+              time.sleep(15)
+          import urllib.request
+          for name in names:
+              with urllib.request.urlopen('http://' + name + '/.well-known/acme-challenge/rsc-cutover-preflight', timeout=30) as response:
+                  if response.status != 200 or response.read().decode().strip() != 'rsc-cutover-preflight':
+                      raise SystemExit('public_http_challenge_preflight=false')
+          print('public_http_challenge_preflight=true')
+          PY
+
+          "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' TARGET_REVISION='$TARGET_REVISION' TARGET_DOMAIN='$TARGET_DOMAIN' TARGET_WWW='$TARGET_WWW' CONTACT_EMAIL='$CONTACT_EMAIL' python3 -" <<'PY'
+          import datetime, hashlib, json, os, pathlib, re, ssl, subprocess, urllib.request
+          revision = os.environ['TARGET_REVISION']
+          domain = os.environ['TARGET_DOMAIN']
+          www = os.environ['TARGET_WWW']
+          email = os.environ['CONTACT_EMAIL']
+          release = pathlib.Path('/var/www/rsc-outreach/releases') / revision
+          webroot = pathlib.Path('/var/www/letsencrypt')
+          certbot = subprocess.run([
+              'certbot','certonly','--webroot','-w',str(webroot),'--non-interactive','--agree-tos',
+              '--email',email,'--cert-name',domain,'--keep-until-expiring','-d',domain,'-d',www
+          ], capture_output=True, text=True)
+          if certbot.returncode:
+              diagnostic = (certbot.stderr or certbot.stdout or 'no diagnostic').strip()[-1600:]
+              diagnostic = re.sub(r'(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])', '[ip-redacted]', diagnostic)
+              diagnostic = re.sub(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', '[email-redacted]', diagnostic)
+              print('certificate_issue_diagnostic=' + diagnostic.replace('\n',' | '))
+              raise SystemExit('certificate_issue_failed=true')
+          live = pathlib.Path('/etc/letsencrypt/live') / domain
+          cert = live / 'fullchain.pem'
+          key = live / 'privkey.pem'
+          if not cert.exists() or not key.exists(): raise SystemExit('certificate_files_missing=true')
+          config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-public.conf')
+          desired = f'''server {{
+              listen 80;
+              server_name {domain} {www};
+              location ^~ /.well-known/acme-challenge/ {{ root {webroot}; }}
+              location / {{ return 301 https://{domain}$request_uri; }}
+          }}
+          server {{
+              listen 443 ssl http2;
+              server_name {www};
+              ssl_certificate {cert};
+              ssl_certificate_key {key};
+              ssl_protocols TLSv1.2 TLSv1.3;
+              return 301 https://{domain}$request_uri;
+          }}
+          server {{
+              listen 443 ssl http2;
+              server_name {domain};
+              root {release};
+              index index.html;
+              ssl_certificate {cert};
+              ssl_certificate_key {key};
+              ssl_protocols TLSv1.2 TLSv1.3;
+              add_header X-Content-Type-Options nosniff always;
+              add_header Referrer-Policy strict-origin-when-cross-origin always;
+              location / {{ try_files $uri $uri/ /index.html; }}
+          }}
+          '''
+          state = pathlib.Path(os.environ['BACKUP_DIR']) / 'nginx-before.json'
+          saved = json.loads(state.read_text())
+          if hashlib.sha256(config.read_bytes()).hexdigest() not in saved['owned_shas']: raise RuntimeError('nginx_tls_compare_failed')
+          saved['owned_shas'].append(hashlib.sha256(desired.encode()).hexdigest())
+          state.write_text(json.dumps(saved))
+          with state.open('rb') as f: os.fsync(f.fileno())
+          config.write_text(desired)
+          config.chmod(0o644)
+          subprocess.run(['restorecon','-F',str(config)], check=True, capture_output=True)
+          subprocess.run(['nginx','-t'], check=True, capture_output=True)
+          subprocess.run(['systemctl','reload','nginx'], check=True, capture_output=True)
+          context = ssl.create_default_context()
+          request = urllib.request.Request('https://127.0.0.1/revision.txt', headers={'Host':domain})
+          # curl supplies the correct SNI while forcing loopback.
+          local = subprocess.run(['curl','--noproxy','*','--fail','--silent','--show-error','--resolve',domain + ':443:127.0.0.1','https://' + domain + '/revision.txt'], capture_output=True, text=True, check=True)
+          if local.stdout.strip() != revision: raise SystemExit('local_tls_revision_mismatch=true')
+          cert_info = subprocess.run(['openssl','x509','-in',str(cert),'-noout','-enddate'], capture_output=True, text=True, check=True).stdout.strip()
+          receipt = pathlib.Path('/var/lib/rsc-ops/outreach-cutover.json')
+          receipt.write_text(json.dumps({
+              'revision':revision,'canonical':'https://' + domain + '/',
+              'config_sha256':hashlib.sha256(config.read_bytes()).hexdigest(),
+              'certificate_enddate':cert_info,'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'rollback_state':str(state),'live_cutover':False,'tls_local_verified':True
+          }))
+          receipt.chmod(0o600)
+          print('tls_vhost_verified=true; exact_revision=' + revision + '; canonical_https=true; rollback_pointer_saved=true')
+          PY
+
+          python3 - <<'PY'
+          import os, re, ssl, urllib.request
+          domain = os.environ['TARGET_DOMAIN']
+          www = os.environ['TARGET_WWW']
+          revision = os.environ['TARGET_REVISION']
+          def read(url):
+              req = urllib.request.Request(url, headers={'User-Agent':'RSC-cutover-verifier/1.0'})
+              with urllib.request.urlopen(req, timeout=30, context=ssl.create_default_context()) as response:
+                  return response.geturl(), response.status, response.read()
+          final, status, body = read('https://' + domain + '/revision.txt')
+          if status != 200 or body.decode().strip() != revision: raise SystemExit('public_revision_verification=false')
+          home_url, home_status, html = read('https://' + domain + '/')
+          if home_status != 200 or not home_url.startswith('https://' + domain): raise SystemExit('canonical_home_verification=false')
+          scripts = re.findall(rb'<script[^>]+src=["\\\']([^"\\\']+)', html)
+          bundle = b''
+          for src in scripts:
+              path = src.decode()
+              if path.startswith('http'): url = path
+              else: url = 'https://' + domain + ('/' if not path.startswith('/') else '') + path
+              bundle += read(url)[2]
+          checks = {
+              'cta_form': b'9zWr6fBAogBrgwvT5iYl' in bundle,
+              'privacy_link': b'/privacy-policy' in bundle,
+              'terms_link': b'/terms-of-service' in bundle,
+          }
+          if not all(checks.values()): raise SystemExit('public_bundle_acceptance=false')
+          for path in ('/privacy-policy/','/terms-of-service/'):
+              url, code, page = read('https://' + domain + path)
+              if code != 200 or b'<html' not in page.lower(): raise SystemExit('policy_deep_link_failed=' + path)
+          www_url, www_status, _ = read('https://' + www + '/revision.txt')
+          if www_status != 200 or not www_url.startswith('https://' + domain + '/'): raise SystemExit('www_canonical_redirect=false')
+          print('public_revision_verified=true; public_https_verified=true; canonical_www_redirect=true; primary_cta_verified=true; policy_links_verified=true')
+          PY
+
+          "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' python3 -" <<'PY'
+          import json, pathlib, subprocess
+          receipt = pathlib.Path('/var/lib/rsc-ops/outreach-cutover.json')
+          data = json.loads(receipt.read_text())
+          if not data.get('tls_local_verified'): raise SystemExit('native_cutover_receipt_invalid=true')
+          config = pathlib.Path('/etc/nginx/conf.d/rsc-outreach-public.conf')
+          if not config.exists(): raise SystemExit('native_cutover_config_missing=true')
+          subprocess.run(['nginx','-t'], check=True, capture_output=True)
+          import hashlib, os
+          directory = pathlib.Path(os.environ['BACKUP_DIR'])
+          others = json.loads((directory/'nginx-protected.json').read_text())
+          now = {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('/etc/nginx').rglob('*') if p.is_file() and p != config}
+          if now != others: raise SystemExit('unrelated_nginx_config_changed=true')
+          if hashlib.sha256(config.read_bytes()).hexdigest() != data['config_sha256']: raise SystemExit('nginx_final_compare_failed=true')
+          for service in ('bridgeghl.service','bridgeghl-mcp.service','bridgeghl-tunnel.service'):
+              subprocess.run(['systemctl','is-active','--quiet',service], check=True, capture_output=True)
+          # Existing certbot scheduler, scoped reload on renewal of this certificate only.
+          units = subprocess.run(['systemctl','list-unit-files','--no-legend','certbot*.timer'],capture_output=True,text=True,check=True).stdout
+          timers = [line.split()[0] for line in units.splitlines() if line.split() and line.split()[0] in ('certbot.timer','certbot-renew.timer')]
+          if not timers: raise SystemExit('existing_certificate_renewal_timer_missing=true')
+          hook = pathlib.Path('/etc/letsencrypt/renewal-hooks/deploy/rsc-outreach-reload')
+          hook_text = '#!/bin/sh\ncase "${RENEWED_LINEAGE:-}" in\n  /etc/letsencrypt/live/restorationsecurityoutreach.com) /usr/sbin/nginx -t && /usr/bin/systemctl reload nginx ;;\nesac\n'
+          if hook.exists() and hook.read_text() != hook_text: raise SystemExit('renewal_hook_conflict=true')
+          import base64
+          renewal_state = dict(hook=str(hook),prior=base64.b64encode(hook.read_bytes()).decode() if hook.exists() else None,
+                               desired_sha=hashlib.sha256(hook_text.encode()).hexdigest(),timer=timers[0],
+                               enabled=subprocess.run(['systemctl','is-enabled','--quiet',timers[0]],capture_output=True).returncode==0,
+                               active=subprocess.run(['systemctl','is-active','--quiet',timers[0]],capture_output=True).returncode==0)
+          renewal_backup = directory/'renewal-before.json'
+          renewal_backup.write_text(json.dumps(renewal_state)); renewal_backup.chmod(0o600)
+          with renewal_backup.open('rb') as f: os.fsync(f.fileno())
+          hook.parent.mkdir(parents=True,exist_ok=True)
+          hook.write_text(hook_text); hook.chmod(0o700)
+          subprocess.run(['systemctl','enable','--now',timers[0]],check=True,capture_output=True)
+          subprocess.run(['systemctl','is-active','--quiet',timers[0]],check=True,capture_output=True)
+          data.update(live_cutover=True,public_https_verified=True,unrelated_nginx_preserved=True,renewal_timer=timers[0],renewal_hook=str(hook))
+          receipt.write_text(json.dumps(data)); receipt.chmod(0o600)
+          (directory/'success.json').write_text(json.dumps(data)); (directory/'success.json').chmod(0o600)
+          print('native_cutover_receipt_readback=true; revision=' + data['revision'] + '; live_cutover=true; renewal_configured=true; protected_services_active=true')
+          PY
+
+          python3 scripts/rsc_outreach_dns.py verify
+          "${SSH[@]}" "sudo -n env BACKUP_DIR='$BACKUP_DIR' python3 - verify" < scripts/rsc_outreach_ingress.py
+          trap - EXIT
+          echo "cutover_success=true; rollback_not_needed=true"
+
+      - name: Remove runner copies; retain durable private recovery evidence
         if: always()
         shell: bash
-        run: rm -f ~/.ssh/rsc-ingress-inspect ~/.ssh/rsc-hosts
+        run: rm -f ~/.ssh/rsc-cutover ~/.ssh/rsc-hosts /tmp/rsc-outreach-dns-before.json /tmp/rsc-outreach-dns-mutated
+
