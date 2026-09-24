@@ -151,6 +151,12 @@ jobs:
           challenge_probe.parent.mkdir(parents=True, exist_ok=True)
           challenge_probe.write_text('rsc-cutover-preflight\n')
           challenge_probe.chmod(0o644)
+          # sudo's restrictive umask can leave newly created challenge parents inaccessible to nginx.
+          challenge_dirs = [webroot, webroot / '.well-known', challenge_probe.parent]
+          print('challenge_directories_public_before=' + str(all(p.stat().st_mode & 0o005 == 0o005 for p in challenge_dirs)).lower())
+          for directory in challenge_dirs: directory.chmod(0o755)
+          subprocess.run(['restorecon','-RF',str(webroot)],check=True,capture_output=True)
+          if not all(p.stat().st_mode & 0o777 == 0o755 for p in challenge_dirs): raise SystemExit('challenge_directory_permissions_failed=true')
           desired = f'''server {{
               listen 80;
               server_name {domain} {www};
@@ -175,6 +181,8 @@ jobs:
               loaded = subprocess.run(['nginx','-T'], capture_output=True, text=True, check=True).stdout
               if str(release) not in loaded or ('server_name ' + domain + ' ' + www) not in loaded:
                   raise RuntimeError('http_vhost_not_loaded')
+              local_challenge = subprocess.run(['curl','--noproxy','*','--fail','--silent','--show-error','--resolve',domain + ':80:127.0.0.1','http://' + domain + '/.well-known/acme-challenge/rsc-cutover-preflight'],capture_output=True,text=True,check=True)
+              if local_challenge.stdout.strip() != 'rsc-cutover-preflight': raise RuntimeError('local_challenge_readback_failed')
               print('http_vhost_prepared=true; staged_revision_verified=true; nginx_config_loaded=true; rollback_saved=true')
           except Exception:
               if prior_exists: config.write_bytes(backup.read_bytes())
@@ -386,4 +394,3 @@ jobs:
         if: always()
         shell: bash
         run: rm -f ~/.ssh/rsc-cutover ~/.ssh/rsc-hosts /tmp/rsc-outreach-dns-before.json /tmp/rsc-outreach-dns-mutated
-
