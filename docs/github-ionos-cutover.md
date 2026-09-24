@@ -1,5 +1,11 @@
 # GitHub and IONOS cutover: BridgeGHL, Fabric, and mail
 
+## Current outreach acceptance — 2026-09-24
+The existing IONOS VPS now serves [Restoration Security Outreach](https://restorationsecurityoutreach.com/) over verified HTTPS. [Production run36025080806](https://github.com/pqexpert/BridgeGHL/actions/runs/36025080806) passed DNS, exact website revision, canonical www routing, CTA/policy checks, protected records/services and renewal configuration. See [the current outreach recovery runbook](outreach-deployment.md) for the bounded execution and retained backup controls.
+
+HighLevel's active outreach sending subdomain is mg.restorationsecurityoutreach.com, as recorded in the current private operating evidence. Preserve its mail records. The September23 mg.restoration-mt.com setup notes below are historical and are not the current outreach-domain plan.
+
+## September23 runtime and migration snapshot
 Status as of 2026-09-23. ChatGPT-to-IONOS BridgeGHL health is verified; Income actor publication and Mailgun remain open.
 
 ## Working runtime
