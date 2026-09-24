@@ -36,8 +36,19 @@ jobs:
           root=pathlib.Path('/var/lib/rsc-ops/cutovers/outreach-36023514664-1')
           p=pathlib.Path('/var/www/letsencrypt/.well-known/acme-challenge/rsc-cutover-preflight')
           for v in [pathlib.Path('/var'),pathlib.Path('/var/www'),*reversed(list(p.parents)[:3]),p]:
-              r=subprocess.run(['ls','-Zd',str(v)],capture_output=True,text=True)
+              r=subprocess.run(['ls','-lZd',str(v)],capture_output=True,text=True)
               print('challenge_metadata='+r.stdout.strip())
+          for v in [pathlib.Path('/var/www'),p.parent,p]:
+              actual=subprocess.run(['matchpathcon','-V',str(v)],capture_output=True,text=True)
+              print('expected_context='+actual.stdout.strip()+' '+actual.stderr.strip())
+              acl=subprocess.run(['getfacl','-p',str(v)],capture_output=True,text=True)
+              print('path_acl='+acl.stdout.strip().replace('\n',' | '))
+          access=subprocess.run(['runuser','-u','nginx','--','head','-c','32',str(p)],capture_output=True,text=True)
+          print('nginx_unix_readable='+str(access.returncode==0))
+          avc=subprocess.run(['ausearch','-m','AVC','-ts','recent'],capture_output=True,text=True)
+          for line in avc.stdout.splitlines():
+              if 'nginx' in line or 'rsc-cutover-preflight' in line:
+                  print('selinux_denial='+re.sub(r'pid=\\d+','pid=[redacted]',line)[:700])
           logs=[]
           for log in pathlib.Path('/var/log/nginx').glob('*error*.log'):
               lines=log.read_text(errors='replace').splitlines()[-150:]
