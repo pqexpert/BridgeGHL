@@ -1,0 +1,66 @@
+name: Inspect outreach challenge denial
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/inspect-outreach-challenge.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 5
+    env:
+      REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+      REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+    steps:
+      - name: Read existing host diagnostic evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m700 ~/.ssh
+          python3 - <<'PY'
+          import base64,os,pathlib
+          raw=os.environ['SSH_PRIVATE_KEY'].strip().replace('\\n','\n')
+          if 'PRIVATE KEY' not in raw: raw=base64.b64decode(''.join(raw.split()),validate=True).decode().strip()
+          p=pathlib.Path.home()/'.ssh/rsc-inspect'
+          p.write_text(raw+'\n'); p.chmod(0o600)
+          PY
+          ssh-keyscan -T10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
+          ssh -o LogLevel=ERROR -o UserKnownHostsFile="$HOME/.ssh/rsc-hosts" -o StrictHostKeyChecking=yes -i "$HOME/.ssh/rsc-inspect" "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
+          import json,pathlib,re,subprocess
+          root=pathlib.Path('/var/lib/rsc-ops/cutovers/outreach-36023514664-1')
+          p=pathlib.Path('/var/www/letsencrypt/.well-known/acme-challenge/rsc-cutover-preflight')
+          for v in [pathlib.Path('/var'),pathlib.Path('/var/www'),*reversed(list(p.parents)[:3]),p]:
+              r=subprocess.run(['ls','-Zd',str(v)],capture_output=True,text=True)
+              print('challenge_metadata='+r.stdout.strip())
+          logs=[]
+          for log in pathlib.Path('/var/log/nginx').glob('*error*.log'):
+              lines=log.read_text(errors='replace').splitlines()[-150:]
+              logs.extend(line for line in lines if 'rsc-cutover-preflight' in line)[-10:]
+          runtime=subprocess.run(['nginx','-T'],capture_output=True,text=True).stdout
+          evidence={'nginx':runtime,'challenge_errors':logs}
+          out=root/'denial-diagnostic.json';out.write_text(json.dumps(evidence));out.chmod(0o600)
+          for line in logs[-5:]:
+              safe=re.sub(r'client:.*', '', line)
+              safe=re.sub(r'^.*?\[error\][^*]*\*\d+\s*', '',safe)
+              print('challenge_denial='+safe[:450])
+          print('global_deny_all_count='+str(runtime.count('deny all')))
+          print('dotfile_location_rules='+str(len(re.findall(r'location[^\n]*(?:well-known|\\[.]|\\\\[.])',runtime))))
+          print('nginx_user_directive='+str(re.findall(r'^\s*user\s+([^;]+);',runtime,re.M)))
+          sockets=subprocess.run(['ss','-ltnpH'],capture_output=True,text=True).stdout.splitlines()
+          for port in ('80','443'):
+              rows=[r for r in sockets if len(r.split())>3 and r.split()[3].rsplit(':',1)[-1]==port]
+              print('port'+port+'_processes='+str([re.findall(r'"([^" ]+)"',r) for r in rows]))
+          # Narrow nginx access-control context; full private config stays in root-only evidence.
+          for line in runtime.splitlines():
+              if re.search(r'(^\s*(?:allow|deny|disable_symlinks|auth_basic)\b|return\s+403|well-known)',line):
+                  print('access_rule='+re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b','[address]',line.strip())[:200])
+          PY
+      - name: Remove temporary transport
+        if: always()
+        run: rm -f ~/.ssh/rsc-inspect ~/.ssh/rsc-hosts
