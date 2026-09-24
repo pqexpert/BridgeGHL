@@ -311,8 +311,16 @@ jobs:
           context = ssl.create_default_context()
           request = urllib.request.Request('https://127.0.0.1/revision.txt', headers={'Host':domain})
           # curl supplies the correct SNI while forcing loopback.
-          local = subprocess.run(['curl','--noproxy','*','--fail','--silent','--show-error','--resolve',domain + ':443:127.0.0.1','https://' + domain + '/revision.txt'], capture_output=True, text=True, check=True)
-          if local.stdout.strip() != revision: raise SystemExit('local_tls_revision_mismatch=true')
+          import time
+          for readiness in range(10):
+              local = subprocess.run(['curl','--noproxy','*','--fail','--silent','--show-error','--max-time','3','--resolve',domain + ':443:127.0.0.1','https://' + domain + '/revision.txt'], capture_output=True, text=True)
+              if local.returncode == 0 and local.stdout.strip() == revision: break
+              if readiness == 9:
+                  diagnostic = pathlib.Path(os.environ['BACKUP_DIR']) / 'tls-read-failure.json'
+                  diagnostic.write_text(json.dumps({'exit':local.returncode,'stdout':local.stdout,'stderr':local.stderr})); diagnostic.chmod(0o600)
+                  raise SystemExit('local_tls_revision_mismatch=true; curl_exit=' + str(local.returncode))
+              time.sleep(1)
+          print('tls_reload_readiness_attempts=' + str(readiness + 1))
           cert_info = subprocess.run(['openssl','x509','-in',str(cert),'-noout','-enddate'], capture_output=True, text=True, check=True).stdout.strip()
           receipt = pathlib.Path('/var/lib/rsc-ops/outreach-cutover.json')
           receipt.write_text(json.dumps({
