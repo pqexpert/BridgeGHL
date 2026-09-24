@@ -48,7 +48,7 @@ jobs:
           test -s ~/.ssh/rsc-hosts
           python3 - <<'PY'
           from pathlib import Path
-          Path('/tmp/ionos_dns.py').write_text(r'''import hashlib, ipaddress, json, os, socket, sys, unicodedata, urllib.error, urllib.request
+          Path('/tmp/ionos_dns.py').write_text(r'''import collections, hashlib, ipaddress, json, os, socket, sys, unicodedata, urllib.error, urllib.request
 
           API = 'https://api.hosting.ionos.com/dns/v1'
           DOMAIN = os.environ['TARGET_DOMAIN']
@@ -82,7 +82,10 @@ jobs:
               return zone_id, values
 
           def is_web(record):
-              return record.get('name', '').rstrip('.') in {DOMAIN, WWW} and record.get('type') in {'A','AAAA','CNAME'}
+              return record.get('name', '').rstrip('.') in {DOMAIN, WWW} and record.get('type') in {'A','AAAA','CNAME','ALIAS'}
+
+          def type_counts(values):
+              return dict(sorted(collections.Counter(r.get('type','UNKNOWN') for r in values).items()))
 
           def public_shape(record):
               return {k: record.get(k) for k in ('name','type','content','ttl','prio','disabled') if record.get(k) is not None}
@@ -116,6 +119,7 @@ jobs:
                   'web_records': [public_shape(r) for r in values if is_web(r)],
                   'web_digest': digest([r for r in values if is_web(r)]),
                   'nonweb_digest': digest([r for r in values if not is_web(r)]),
+                  'nonweb_type_counts': type_counts([r for r in values if not is_web(r)]),
                   'target_ip': target_ip,
               }
               Path = __import__('pathlib').Path
@@ -141,6 +145,8 @@ jobs:
               extras = [r for r in after if is_web(r) and r not in root_a and r not in www_cname]
               nonweb_preserved = digest([r for r in after if not is_web(r)]) == snapshot['nonweb_digest']
               print('dns_post_write_counts=root_a:' + str(len(root_a)) + ',www_cname:' + str(len(www_cname)) + ',extras:' + str(len(extras)) + '; nonweb_records_preserved=' + str(nonweb_preserved).lower())
+              if not nonweb_preserved:
+                  print('dns_nonweb_type_counts_before=' + json.dumps(snapshot['nonweb_type_counts'], sort_keys=True) + '; after=' + json.dumps(type_counts([r for r in after if not is_web(r)]), sort_keys=True))
               if zone_id2 != zone_id or len(root_a) != 1 or len(www_cname) != 1 or extras or not nonweb_preserved:
                   raise SystemExit('dns_post_write_verification=false')
               print('dns_web_cutover_verified=true; root_a=1; www_cname=1; nonweb_records_preserved=true')
