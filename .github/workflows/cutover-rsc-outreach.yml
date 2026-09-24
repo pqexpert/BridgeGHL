@@ -185,8 +185,19 @@ jobs:
               loaded = subprocess.run(['nginx','-T'], capture_output=True, text=True, check=True).stdout
               if str(release) not in loaded or ('server_name ' + domain + ' ' + www) not in loaded:
                   raise RuntimeError('http_vhost_not_loaded')
-              local_challenge = subprocess.run(['curl','--noproxy','*','--fail','--silent','--show-error','--resolve',domain + ':80:127.0.0.1','http://' + domain + '/.well-known/acme-challenge/rsc-cutover-preflight'],capture_output=True,text=True,check=True)
-              if local_challenge.stdout.strip() != 'rsc-cutover-preflight': raise RuntimeError('local_challenge_readback_failed')
+              # Reload is asynchronous: the old default vhost can answer briefly before new workers take over.
+              import time
+              for readiness in range(10):
+                  local_challenge = subprocess.run(['curl','--noproxy','*','--silent','--show-error','--max-time','3','--resolve',domain + ':80:127.0.0.1','http://' + domain + '/.well-known/acme-challenge/rsc-cutover-preflight'],capture_output=True,text=True)
+                  if local_challenge.returncode == 0 and local_challenge.stdout.strip() == 'rsc-cutover-preflight': break
+                  if readiness == 9:
+                      diagnostic = private / 'challenge-read-failure.json'
+                      diagnostic.write_text(json.dumps({'stdout':local_challenge.stdout,'stderr':local_challenge.stderr,'nginx':loaded}))
+                      diagnostic.chmod(0o600)
+                      print('local_challenge_denied=' + str('403' in local_challenge.stdout).lower())
+                      raise RuntimeError('local_challenge_readback_failed')
+                  time.sleep(1)
+              print('http_reload_readiness_attempts=' + str(readiness + 1))
               print('http_vhost_prepared=true; staged_revision_verified=true; nginx_config_loaded=true; rollback_saved=true')
           except Exception:
               if prior_exists: config.write_bytes(backup.read_bytes())
