@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pqexpert/rsc-operations-console
-          ref: 444c3f08a2afd232dfaa2b0e70c9fe3505932bb0
+          ref: b2feed67d768d0e29e498b8af6189bb6b23850f9
           token: ${{ secrets.GIT_PAT }}
           persist-credentials: false
           sparse-checkout: web/outreach
@@ -34,7 +34,7 @@ jobs:
           if ! npm ci > /tmp/rsc-build.log 2>&1; then echo "dependency_install=false; details_withheld=true"; exit 1; fi
           if ! npm run build >> /tmp/rsc-build.log 2>&1; then echo "static_build=false; details_withheld=true"; exit 1; fi
           test -s dist/index.html
-          printf '%s\n' '444c3f08a2afd232dfaa2b0e70c9fe3505932bb0' > dist/revision.txt
+          printf '%s\n' 'b2feed67d768d0e29e498b8af6189bb6b23850f9' > dist/revision.txt
           tar -czf /tmp/rsc-outreach.tar.gz -C dist .
           echo "static_build=true"
       - name: Stage immutable release through existing VPS transport
@@ -59,11 +59,11 @@ jobs:
           ssh-keygen -y -f ~/.ssh/rsc-stage >/dev/null 2>&1
           ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/rsc-hosts 2>/dev/null
           test -s ~/.ssh/rsc-hosts
-          scp -q -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage /tmp/rsc-outreach.tar.gz "$REMOTE_USER@$REMOTE_HOST:/tmp/rsc-outreach-444c3f0.tar.gz"
+          scp -q -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage /tmp/rsc-outreach.tar.gz "$REMOTE_USER@$REMOTE_HOST:/tmp/rsc-outreach-b2feed6.tar.gz"
           ssh -o LogLevel=ERROR -o UserKnownHostsFile=~/.ssh/rsc-hosts -o StrictHostKeyChecking=yes -i ~/.ssh/rsc-stage "$REMOTE_USER@$REMOTE_HOST" 'sudo -n python3 -' <<'PY'
           import tarfile, pathlib, hashlib, json, os, datetime
-          revision = '444c3f08a2afd232dfaa2b0e70c9fe3505932bb0'
-          archive = pathlib.Path('/tmp/rsc-outreach-444c3f0.tar.gz')
+          revision = 'b2feed67d768d0e29e498b8af6189bb6b23850f9'
+          archive = pathlib.Path('/tmp/rsc-outreach-b2feed6.tar.gz')
           root = pathlib.Path('/var/www/rsc-outreach/releases') / revision
           try:
               root.mkdir(parents=True, exist_ok=True)
