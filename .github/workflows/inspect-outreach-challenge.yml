@@ -41,7 +41,7 @@ jobs:
           logs=[]
           for log in pathlib.Path('/var/log/nginx').glob('*error*.log'):
               lines=log.read_text(errors='replace').splitlines()[-150:]
-              logs.extend(line for line in lines if 'rsc-cutover-preflight' in line)[-10:]
+              logs.extend([line for line in lines if 'rsc-cutover-preflight' in line][-10:])
           runtime=subprocess.run(['nginx','-T'],capture_output=True,text=True).stdout
           evidence={'nginx':runtime,'challenge_errors':logs}
           out=root/'denial-diagnostic.json';out.write_text(json.dumps(evidence));out.chmod(0o600)
