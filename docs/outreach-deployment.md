@@ -25,3 +25,11 @@ A failed attempt retains its private evidence. Preserve the corrected host secur
 Infrastructure acceptance is separate from a customer event. Readiness uses the existing HighLevel form and published inquiry/triage workflows. Josh retains the relationship, calls, care and troubleshooting. Do not replay completed owner tests or enroll historic contacts. The next natural eligible inquiry provides the continuous form-to-acknowledgment-to-owner/reply evidence.
 
 RSC owns delivery and native signal reconciliation through its existing cadence; Distiller consumes completed findings and is the sole Calendar writer. No new monitoring task or actor is required.
+
+## HighLevel public journey subdomain — 2026-09-24
+
+HighLevel native journey pages use `go.restorationsecurityoutreach.com`. Its native domain dialog required CNAME `sites.ludicrous.cloud`; this was created and natively read back in [run36063447669](https://github.com/pqexpert/BridgeGHL/actions/runs/36063447669), source `d9930fe534ef7ab1ac2aeaceb5c32d5b04198e6d` / PR36, under RBO-97 comment11475. All existing root/www, mail and other records were preserved. This DNS receipt does not itself prove HighLevel binding, SSL, pages or customer journeys; those require native HighLevel/public readback.
+
+The isolated `connect-highlevel-go.yml` workflow is manual-only after this acceptance. It uses the existing `zijifabric` secret custody and `bridgeghl-production` serialization. Private immutable before/intent/result/after/success evidence is at `/var/lib/rsc-ops/cutovers/outreach-36063447669-1`. The created record ID is `4d3e6d42-bbd1-73cb-694b-6df814a75d8f`; TTL300. Protected-record digest: `de4cadc50cf7dbc1e92fd7337cb60fd0f3e1d51cbc765efd74547fac2bc91203`.
+
+Do not rerun the old root/www cutover for HighLevel changes. The new helper no-ops for an already correct active go CNAME and stops on conflicting records. Recovery may remove only this newly created ID after current exact-name/value/identity comparison against private evidence; preserve subsequent legitimate edits, all pre-existing records, and the HighLevel binding owner. Uncertain creation responses require native readback before any retry; never delete an unowned record or replace the containing zone.
