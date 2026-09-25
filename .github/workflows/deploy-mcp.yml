@@ -130,6 +130,12 @@ jobs:
               return False
           assert healthy(json.load(sys.stdin))
           '
+              curl --max-time 8 --fail --silent --show-error \
+                --header 'Content-Type: application/json' \
+                --header 'Accept: application/json, text/event-stream' \
+                --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' \
+                http://127.0.0.1:8001/mcp | python3 -c 'import json,sys; tools=json.load(sys.stdin)["result"]["tools"]; assert any(t["name"] == "read_journey_evidence" for t in tools)'
+              echo "journey_evidence_tool_discovered=true"
               echo "loopback_mcp_health_verified=true"
               exit 0
             fi

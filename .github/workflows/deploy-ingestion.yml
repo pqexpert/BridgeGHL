@@ -6,6 +6,7 @@ on:
     paths:
       - app.py
       - ingestion.py
+      - journey_evidence.py
       - scripts/ingest_drive.py
       - scripts/deploy_ingestion.sh
       - scripts/runtime_ingestion_check.py
@@ -62,7 +63,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
           ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           printf '%s' "$GITHUB_SHA" > DEPLOYED_SHA
-          tar -czf ingestion-release.tgz app.py ingestion.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py DEPLOYED_SHA
+          tar -czf ingestion-release.tgz app.py ingestion.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py DEPLOYED_SHA
           remote_package="/tmp/bridgeghl-source.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tgz"
           scp -i ~/.ssh/bridgeghl ingestion-release.tgz "${REMOTE_USER}@${REMOTE_HOST}:${remote_package}"
           ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" "bash -s -- '$remote_package' '$GITHUB_SHA'" < scripts/deploy_ingestion.sh
