@@ -1,6 +1,6 @@
 """Contact-scoped, metadata-only evidence. No CRM writes or message content."""
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, Optional
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field, model_validator
 import requests
@@ -10,12 +10,12 @@ ID = r'^[A-Za-z0-9_-]{1,100}$'
 class EvidenceQuery(BaseModel):
     contact_id: str = Field(pattern=ID)
     resource: Literal['conversations', 'messages', 'tasks', 'submissions']
-    conversation_id: str | None = Field(default=None, pattern=ID)
+    conversation_id: Optional[str] = Field(default=None, pattern=ID)
     limit: int = Field(default=20, ge=1, le=50)
-    cursor: str | None = Field(default=None, max_length=100, pattern=r'^[A-Za-z0-9_:T.+-]+$')
+    cursor: Optional[str] = Field(default=None, max_length=100, pattern=r'^[A-Za-z0-9_:T.+-]+$')
     page: int = Field(default=1, ge=1, le=100)
-    start_date: date | None = None
-    end_date: date | None = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
     @model_validator(mode='after')
     def bounded(self):
@@ -139,6 +139,6 @@ def read_evidence(bridge, query):
 
 def register_routes(bridge):
     @bridge.app.post('/read/journey-evidence')
-    def journey_evidence(query: EvidenceQuery, x_api_key: str | None = Header(default=None)):
+    def journey_evidence(query: EvidenceQuery, x_api_key: Optional[str] = Header(default=None)):
         bridge.require_api_key(x_api_key)
         return read_evidence(bridge, query)
