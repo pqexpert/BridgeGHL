@@ -6,6 +6,8 @@ The BridgeGHL service remains the sole writer and audit boundary.
 
 import json
 import os
+from typing import Annotated, Literal
+from pydantic import Field
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -105,20 +107,27 @@ def execute_contact_tags(contact_id: str, reason: str, tags_add: list[str], tags
 
 
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
-def read_journey_evidence(contact_id: str, resource: str, conversation_id: str | None = None,
-                          limit: int = 20, cursor: str | None = None, page: int = 1,
-                          start_date: str | None = None, end_date: str | None = None) -> dict:
-    """Read contact-scoped conversations, messages, tasks or submissions metadata.
+def read_journey_evidence(contact_id: str, resource: Literal["conversations", "messages", "tasks", "submissions", "email"],
+                          conversation_id: str | None = None,
+                          limit: Annotated[int, Field(ge=1, le=50)] = 20,
+                          cursor: str | None = None, page: Annotated[int, Field(ge=1, le=100)] = 1,
+                          start_date: str | None = None, end_date: str | None = None,
+                          email_id: str | None = None) -> dict:
+    """Read contact-scoped conversations, messages, tasks, submissions or one email.
 
     Uses the existing server-side identity. No bodies, subjects or form answers.
     Check pagination completeness; a failed/mismatched read is not zero results.
-    Messages require conversation_id. Submissions use at most a 31-day window.
+    Limit must be 1–50; page 1–100. Messages/email require conversation_id.
+    Email requires email_id (individual email ID, not its thread ID).
+    Submissions end_date is exclusive; default tomorrow UTC includes today,
+    with at most a 31-day window. Email status is native provider status.
+    Discover individual email IDs from messages.email_message_ids when present.
     This read cannot prove workflow enrollment, inbox receipt or a complete journey.
     """
     return _call("/read/journey-evidence", {
         "contact_id": contact_id, "resource": resource, "conversation_id": conversation_id,
         "limit": limit, "cursor": cursor, "page": page,
-        "start_date": start_date, "end_date": end_date,
+        "start_date": start_date, "end_date": end_date, "email_id": email_id,
     })
 
 

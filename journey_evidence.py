@@ -9,8 +9,9 @@ import re
 ID = r'^[A-Za-z0-9_-]{1,100}$'
 class EvidenceQuery(BaseModel):
     contact_id: str = Field(pattern=ID)
-    resource: Literal['conversations', 'messages', 'tasks', 'submissions']
+    resource: Literal['conversations', 'messages', 'tasks', 'submissions', 'email']
     conversation_id: Optional[str] = Field(default=None, pattern=ID)
+    email_id: Optional[str] = Field(default=None, pattern=ID)
     limit: int = Field(default=20, ge=1, le=50)
     cursor: Optional[str] = Field(default=None, max_length=100, pattern=r'^[A-Za-z0-9_:T.+-]+$')
     page: int = Field(default=1, ge=1, le=100)
@@ -19,10 +20,12 @@ class EvidenceQuery(BaseModel):
 
     @model_validator(mode='after')
     def bounded(self):
-        if self.resource == 'messages' and not self.conversation_id:
-            raise ValueError('messages requires conversation_id')
+        if self.resource in ('messages', 'email') and not self.conversation_id:
+            raise ValueError('messages/email requires conversation_id')
+        if self.resource == 'email' and not self.email_id:
+            raise ValueError('email requires email_id')
         if self.resource == 'submissions':
-            self.end_date = self.end_date or datetime.now(timezone.utc).date()
+            self.end_date = self.end_date or (datetime.now(timezone.utc).date() + timedelta(days=1))
             self.start_date = self.start_date or self.end_date - timedelta(days=30)
             if not 0 <= (self.end_date - self.start_date).days <= 31:
                 raise ValueError('submission window must be at most 31 days')
@@ -31,6 +34,7 @@ class EvidenceQuery(BaseModel):
 FIELDS = {
     'conversations': ('id', 'contactId', 'locationId', 'lastMessageDate', 'lastMessageType', 'lastMessageDirection', 'unreadCount', 'assignedTo'),
     'messages': ('id', 'contactId', 'locationId', 'conversationId', 'dateAdded', 'direction', 'status', 'type', 'messageType', 'source', 'userId'),
+    'email': ('id', 'threadId', 'contactId', 'locationId', 'conversationId', 'dateAdded', 'direction', 'status', 'replyToMessageId', 'source'),
     'tasks': ('id', 'contactId', 'assignedTo', 'dueDate', 'completed'),
     'submissions': ('id', 'contactId', 'createdAt', 'formId'),
 }
@@ -53,6 +57,22 @@ def next_cursor(value, previous=None, *, timestamp=False):
         except ValueError:
             failure('provider_pagination_mismatch')
     return value
+
+def email_message_ids(row):
+    """Project only the documented email IDs, never arbitrary nested meta."""
+    current = row
+    for key in ('meta', 'email', 'email'):
+        if key not in current:
+            return None
+        current = current[key]
+        if not isinstance(current, dict):
+            failure('provider_resource_type_mismatch')
+    if 'messageIds' not in current:
+        return None
+    ids = current['messageIds']
+    if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(item, str) or not re.fullmatch(ID, item) for item in ids):
+        failure('provider_resource_type_mismatch')
+    return ids[:]
 
 def read_evidence(bridge, query):
     """Every read validates parent identity before admitting a child resource."""
@@ -77,6 +97,10 @@ def read_evidence(bridge, query):
         failure('location_mismatch', 403)
     resource = query.resource
     pagination = {'limit': query.limit, 'complete': False}
+    if resource in ('messages', 'email'):
+        conversation = get('/conversations/' + query.conversation_id)
+        if conversation.get('id') != query.conversation_id or conversation.get('contactId') != query.contact_id or conversation.get('locationId') != bridge.HIGHLEVEL_LOCATION_ID:
+            failure('conversation_identity_mismatch', 403)
     if resource == 'conversations':
         params = {'locationId': bridge.HIGHLEVEL_LOCATION_ID, 'contactId': query.contact_id, 'limit': query.limit, 'sort': 'desc'}
         if query.cursor: params['startAfterDate'] = query.cursor
@@ -89,10 +113,13 @@ def read_evidence(bridge, query):
         more = bool(rows) and total > len(rows)
         pagination.update(total=total, has_more=more, complete=query.cursor is None and len(rows) >= total)
         pagination['next_cursor'] = next_cursor(rows[-1].get('lastMessageDate') if isinstance(rows[-1], dict) else None, query.cursor, timestamp=True) if more else None
+    elif resource == 'email':
+        data = get('/conversations/messages/email/' + query.email_id)
+        if data.get('id') != query.email_id or not isinstance(data.get('threadId'), str):
+            failure('provider_resource_type_mismatch')
+        rows = [data]
+        pagination.update(limit=1, complete=True, has_more=False)
     elif resource == 'messages':
-        conversation = get('/conversations/' + query.conversation_id)
-        if conversation.get('id') != query.conversation_id or conversation.get('contactId') != query.contact_id or conversation.get('locationId') != bridge.HIGHLEVEL_LOCATION_ID:
-            failure('conversation_identity_mismatch', 403)
         params = {'limit': query.limit}
         if query.cursor: params['lastMessageId'] = query.cursor
         data = get('/conversations/' + query.conversation_id + '/messages', params)
@@ -111,7 +138,7 @@ def read_evidence(bridge, query):
         meta = data.get('meta')
         if not isinstance(meta, dict) or 'nextPage' not in meta or meta.get('currentPage') != query.page or not (meta['nextPage'] is None or type(meta['nextPage']) is int and query.page < meta['nextPage'] <= 100):
             failure('provider_pagination_mismatch')
-        pagination.update(complete=query.page == 1 and meta['nextPage'] is None, has_more=meta['nextPage'] is not None, next_page=meta['nextPage'], page=query.page, start_date=query.start_date.isoformat(), end_date=query.end_date.isoformat())
+        pagination.update(complete=query.page == 1 and meta['nextPage'] is None, has_more=meta['nextPage'] is not None, next_page=meta['nextPage'], page=query.page, start_date=query.start_date.isoformat(), end_date=query.end_date.isoformat(), end_date_exclusive=True)
     if not isinstance(rows, list): failure('provider_resource_type_mismatch')
     if resource != 'tasks' and len(rows) > query.limit:
         failure('provider_pagination_mismatch')
@@ -121,15 +148,19 @@ def read_evidence(bridge, query):
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get('id'), str) or row.get('contactId') != query.contact_id:
             failure('resource_contact_mismatch')
-        if resource in ('conversations', 'messages') and row.get('locationId') != bridge.HIGHLEVEL_LOCATION_ID:
+        if resource in ('conversations', 'messages', 'email') and row.get('locationId') != bridge.HIGHLEVEL_LOCATION_ID:
             failure('resource_location_mismatch', 403)
-        if resource == 'messages' and row.get('conversationId') != query.conversation_id:
+        if resource in ('messages', 'email') and row.get('conversationId') != query.conversation_id:
             failure('resource_conversation_mismatch', 403)
         if 'locationId' in row and row['locationId'] != bridge.HIGHLEVEL_LOCATION_ID:
             failure('resource_location_mismatch', 403)
         # Only scalar allowlisted metadata; no provider bodies, subjects, addresses,
         # free-text task titles, form answers, attachment URLs or arbitrary meta.
         projected.append({key: row[key] for key in FIELDS[resource] if key in row and (row[key] is None or isinstance(row[key], (str, int, bool, float)))})
+        if resource == 'messages':
+            ids = email_message_ids(row)
+            if ids is not None:
+                projected[-1]['email_message_ids'] = ids
     if len(rows) > query.limit: pagination['complete'] = False
     return {'ok': True, 'resource': resource, 'contact_id': query.contact_id,
             'observed_at': datetime.now(timezone.utc).isoformat(),
