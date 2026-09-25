@@ -70,3 +70,5 @@ Authority: owner-authorized September 25 journey-evidence repair; bounded existi
 service deployment. Negative boundaries: no customer writes/sends, new secret,
 new vendor/runtime/scheduler, Calendar write or Dzokden data. Material unknowns:
 production scope acceptance and worker app refresh until native proof.
+
+Singular email reads admit only one explicit root/emailMessage/email/message/data object. Exact email, contact, location and conversation identity remain mandatory. Missing threadId is returned as null; malformed or ambiguous envelopes fail closed.

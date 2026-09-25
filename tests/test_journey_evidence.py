@@ -176,3 +176,30 @@ def test_compact_email_ids_bad_shape_rejected_even_with_valid_nested(ids):
 def test_combined_email_ids_remain_bounded():
     from journey_evidence import email_message_ids
     with pytest.raises(HTTPException): email_message_ids({'meta': {'email': {'messageIds': [str(i) for i in range(50)], 'email': {'messageIds': ['extra']}}}})
+
+
+@pytest.mark.parametrize('wrapper', [None, 'emailMessage', 'email', 'message', 'data'])
+@pytest.mark.parametrize('thread', ['absent', None, 'thread'])
+def test_email_explicit_envelopes_and_optional_thread(wrapper, thread):
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    email = dict(conv, id='email', conversationId='conv', status='delivered', body='private')
+    if thread != 'absent': email['threadId'] = thread
+    payload = {wrapper: email} if wrapper else email
+    result = read(bridge_for((200, CONTACT), (200, conv), (200, payload)), resource='email', conversation_id='conv', email_id='email')
+    assert result['records'][0]['threadId'] == (None if thread == 'absent' else thread)
+    assert 'private' not in str(result)
+
+@pytest.mark.parametrize('wrapper', ['emailMessage', 'email', 'message', 'data'])
+@pytest.mark.parametrize('field', ['id', 'contactId', 'locationId', 'conversationId'])
+def test_email_wrappers_preserve_identity_guards(wrapper, field):
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    email = dict(conv, id='email', conversationId='conv')
+    email[field] = 'other'
+    with pytest.raises(HTTPException):
+        read(bridge_for((200, CONTACT), (200, conv), (200, {wrapper: email})), resource='email', conversation_id='conv', email_id='email')
+
+@pytest.mark.parametrize('payload', [{'unknown': {'id': 'email', 'body': 'private'}}, {'email': {'id': 'email'}, 'data': {'id': 'email'}}, {'id': 'email', 'email': {'id': 'email'}}])
+def test_email_unrecognized_or_ambiguous_envelope_fails_privately(payload):
+    from journey_evidence import email_record
+    with pytest.raises(HTTPException) as exc: email_record(payload, 'email')
+    assert 'private' not in str(exc.value.detail)

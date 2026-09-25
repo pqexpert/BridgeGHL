@@ -89,6 +89,25 @@ def email_message_ids(row):
         failure('provider_resource_type_mismatch')
     return result
 
+def email_record(data, email_id):
+    """Normalize only explicit email envelopes; retain all identity checks."""
+    candidates = []
+    if 'id' in data:
+        candidates.append(data)
+    for key in ('emailMessage', 'email', 'message', 'data'):
+        value = data.get(key)
+        if isinstance(value, dict) and 'id' in value:
+            candidates.append(value)
+    if len(candidates) != 1:
+        failure('provider_email_envelope_ambiguous' if candidates else 'provider_email_envelope_unrecognized')
+    row = candidates[0]
+    if row.get('id') != email_id:
+        failure('provider_email_identity_mismatch')
+    thread_id = row.get('threadId')
+    if thread_id is not None and (not isinstance(thread_id, str) or not re.fullmatch(ID, thread_id)):
+        failure('provider_email_thread_type_mismatch')
+    return dict(row, threadId=thread_id)
+
 def read_evidence(bridge, query):
     """Every read validates parent identity before admitting a child resource."""
     if not bridge.HIGHLEVEL_LOCATION_ID or not bridge.HIGHLEVEL_PIT:
@@ -130,9 +149,7 @@ def read_evidence(bridge, query):
         pagination['next_cursor'] = next_cursor(rows[-1].get('lastMessageDate') if isinstance(rows[-1], dict) else None, query.cursor, timestamp=True) if more else None
     elif resource == 'email':
         data = get('/conversations/messages/email/' + query.email_id)
-        if data.get('id') != query.email_id or not isinstance(data.get('threadId'), str):
-            failure('provider_resource_type_mismatch')
-        rows = [data]
+        rows = [email_record(data, query.email_id)]
         pagination.update(limit=1, complete=True, has_more=False)
     elif resource == 'messages':
         params = {'limit': query.limit}
