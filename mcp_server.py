@@ -31,8 +31,19 @@ def _call(path: str, payload: dict | None = None) -> dict:
         with urlopen(request, timeout=25) as response:
             return json.load(response)
     except HTTPError as error:
-        # Do not forward provider error bodies, which may contain private data.
-        return {"ok": False, "bridge_http_status": error.code}
+        # Only stable bridge-owned evidence errors are safe to surface.
+        result = {"ok": False, "bridge_http_status": error.code}
+        if path == "/read/journey-evidence":
+            try:
+                code = json.load(error).get("detail", {}).get("error")
+                if code in {"provider_binding_missing", "provider_unavailable", "provider_scope_or_auth_rejected",
+                            "provider_read_failed", "provider_resource_type_mismatch", "contact_identity_mismatch",
+                            "location_mismatch", "provider_pagination_mismatch", "conversation_identity_mismatch",
+                            "resource_contact_mismatch", "resource_location_mismatch", "resource_conversation_mismatch"}:
+                    result["error"] = code
+            except (ValueError, AttributeError, TypeError):
+                pass
+        return result
     except (URLError, TimeoutError):
         return {"ok": False, "error": "bridge_unavailable"}
 
@@ -90,6 +101,24 @@ def execute_contact_tags(contact_id: str, reason: str, tags_add: list[str], tags
     """Execute authorized tag normalization with bridge audit and readback."""
     return _call("/execute/contact/tags", {
         "contact_id": contact_id, "reason": reason, "tags_add": tags_add, "tags_remove": tags_remove,
+    })
+
+
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+def read_journey_evidence(contact_id: str, resource: str, conversation_id: str | None = None,
+                          limit: int = 20, cursor: str | None = None, page: int = 1,
+                          start_date: str | None = None, end_date: str | None = None) -> dict:
+    """Read contact-scoped conversations, messages, tasks or submissions metadata.
+
+    Uses the existing server-side identity. No bodies, subjects or form answers.
+    Check pagination completeness; a failed/mismatched read is not zero results.
+    Messages require conversation_id. Submissions use at most a 31-day window.
+    This read cannot prove workflow enrollment, inbox receipt or a complete journey.
+    """
+    return _call("/read/journey-evidence", {
+        "contact_id": contact_id, "resource": resource, "conversation_id": conversation_id,
+        "limit": limit, "cursor": cursor, "page": page,
+        "start_date": start_date, "end_date": end_date,
     })
 
 

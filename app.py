@@ -199,6 +199,7 @@ def highlevel_request(
     body: Optional[dict] = None,
     params: Optional[dict] = None,
     timeout: float = 30,
+    retry_reads: bool = True,
 ) -> tuple[int, dict]:
     if not HIGHLEVEL_PIT:
         raise HTTPException(status_code=500, detail="HIGHLEVEL_PIT is not configured")
@@ -214,7 +215,7 @@ def highlevel_request(
         timeout=timeout,
     )
     # A transient provider read rejection must not replay a mutation.
-    if method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
+    if retry_reads and method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
         time.sleep(2)
         response = requests.request(method, url, headers=highlevel_headers(),
                                     json=body, params=params, timeout=timeout)
@@ -738,3 +739,7 @@ def execute_contact_tags(
 import sys
 from ingestion import register_routes
 register_routes(sys.modules[__name__])
+
+# Existing bridge credential and location boundary, read-only evidence surface.
+from journey_evidence import register_routes as register_evidence_routes
+register_evidence_routes(sys.modules[__name__])
