@@ -86,3 +86,31 @@ def test_route_auth_before_provider(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         endpoint(EvidenceQuery(contact_id='person', resource='tasks'), x_api_key='wrong')
     assert exc.value.status_code == 401
+
+@pytest.mark.parametrize('cursor', [None, {}, {'secret': 'body'}, [], 'bad/value', 'same'])
+def test_message_cursor_invalid_fails_closed(cursor):
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    b = bridge_for((200, CONTACT), (200, conv), (200, {'messages': {'messages': [], 'nextPage': True, 'lastMessageId': cursor}}))
+    with pytest.raises(HTTPException): read(b, resource='messages', conversation_id='conv', cursor='same')
+
+@pytest.mark.parametrize('cursor', [None, {'secret': 'body'}, [], 'private arbitrary text', '123'])
+def test_conversation_cursor_invalid_fails_closed(cursor):
+    row = {'id': 'conv', 'contactId': 'person', 'locationId': 'location', 'lastMessageDate': cursor}
+    b = bridge_for((200, CONTACT), (200, {'conversations': [row], 'total': 2}))
+    with pytest.raises(HTTPException): read(b, resource='conversations', cursor='123')
+
+@pytest.mark.parametrize('page', [0, -1, 1, 101, True])
+def test_submission_next_page_must_progress(page):
+    b = bridge_for((200, CONTACT), (200, {'submissions': [], 'meta': {'currentPage': 1, 'nextPage': page}}))
+    with pytest.raises(HTTPException): read(b, resource='submissions')
+
+@pytest.mark.parametrize('resource', ['messages', 'submissions'])
+def test_paginated_provider_cannot_exceed_requested_limit(resource):
+    row = {'id': 'record', 'contactId': 'person', 'locationId': 'location', 'conversationId': 'conv'}
+    rows = [row, dict(row, id='record2')]
+    if resource == 'messages':
+        conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+        b = bridge_for((200, CONTACT), (200, conv), (200, {'messages': {'messages': rows, 'nextPage': False}}))
+    else:
+        b = bridge_for((200, CONTACT), (200, {'submissions': rows, 'meta': {'currentPage': 1, 'nextPage': None}}))
+    with pytest.raises(HTTPException): read(b, resource=resource, conversation_id='conv', limit=1)

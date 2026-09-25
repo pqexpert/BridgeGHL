@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field, model_validator
 import requests
+import re
 
 ID = r'^[A-Za-z0-9_-]{1,100}$'
 class EvidenceQuery(BaseModel):
@@ -37,6 +38,22 @@ FIELDS = {
 def failure(error, status=502):
     raise HTTPException(status_code=status, detail={'error': error})
 
+def next_cursor(value, previous=None, *, timestamp=False):
+    # Provider cursor metadata is untrusted too; never forward nested content.
+    if timestamp and type(value) is int:
+        value = str(value)
+    if not isinstance(value, str) or not 1 <= len(value) <= 100:
+        failure('provider_pagination_mismatch')
+    pattern = r'^[0-9T:.+Z-]+$' if timestamp else ID
+    if not re.fullmatch(pattern, value) or value == previous:
+        failure('provider_pagination_mismatch')
+    if timestamp and not value.isdigit():
+        try:
+            datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            failure('provider_pagination_mismatch')
+    return value
+
 def read_evidence(bridge, query):
     """Every read validates parent identity before admitting a child resource."""
     if not bridge.HIGHLEVEL_LOCATION_ID or not bridge.HIGHLEVEL_PIT:
@@ -67,9 +84,11 @@ def read_evidence(bridge, query):
         rows = data.get('conversations')
         total = data.get('total')
         if type(total) is not int or total < 0: failure('provider_pagination_mismatch')
-        pagination.update(total=total, complete=query.cursor is None and isinstance(rows, list) and len(rows) >= total)
-        if isinstance(rows, list) and rows:
-            pagination['next_cursor'] = rows[-1].get('lastMessageDate') if isinstance(rows[-1], dict) else None
+        if not isinstance(rows, list) or len(rows) > query.limit:
+            failure('provider_pagination_mismatch')
+        more = bool(rows) and total > len(rows)
+        pagination.update(total=total, has_more=more, complete=query.cursor is None and len(rows) >= total)
+        pagination['next_cursor'] = next_cursor(rows[-1].get('lastMessageDate') if isinstance(rows[-1], dict) else None, query.cursor, timestamp=True) if more else None
     elif resource == 'messages':
         conversation = get('/conversations/' + query.conversation_id)
         if conversation.get('id') != query.conversation_id or conversation.get('contactId') != query.contact_id or conversation.get('locationId') != bridge.HIGHLEVEL_LOCATION_ID:
@@ -81,7 +100,7 @@ def read_evidence(bridge, query):
         if not isinstance(envelope, dict) or type(envelope.get('nextPage')) is not bool:
             failure('provider_resource_type_mismatch')
         rows = envelope.get('messages')
-        pagination.update(complete=query.cursor is None and not envelope['nextPage'], has_more=envelope['nextPage'], next_cursor=envelope.get('lastMessageId') if envelope['nextPage'] else None)
+        pagination.update(complete=query.cursor is None and not envelope['nextPage'], has_more=envelope['nextPage'], next_cursor=next_cursor(envelope.get('lastMessageId'), query.cursor) if envelope['nextPage'] else None)
     elif resource == 'tasks':
         data = get('/contacts/' + query.contact_id + '/tasks')
         rows = data.get('tasks')
@@ -90,10 +109,14 @@ def read_evidence(bridge, query):
         data = get('/forms/submissions', {'locationId': bridge.HIGHLEVEL_LOCATION_ID, 'q': query.contact_id, 'limit': query.limit, 'page': query.page, 'startAt': query.start_date.isoformat(), 'endAt': query.end_date.isoformat()})
         rows = data.get('submissions')
         meta = data.get('meta')
-        if not isinstance(meta, dict) or 'nextPage' not in meta or meta.get('currentPage') != query.page or not (meta['nextPage'] is None or type(meta['nextPage']) is int):
+        if not isinstance(meta, dict) or 'nextPage' not in meta or meta.get('currentPage') != query.page or not (meta['nextPage'] is None or type(meta['nextPage']) is int and query.page < meta['nextPage'] <= 100):
             failure('provider_pagination_mismatch')
         pagination.update(complete=query.page == 1 and meta['nextPage'] is None, has_more=meta['nextPage'] is not None, next_page=meta['nextPage'], page=query.page, start_date=query.start_date.isoformat(), end_date=query.end_date.isoformat())
     if not isinstance(rows, list): failure('provider_resource_type_mismatch')
+    if resource != 'tasks' and len(rows) > query.limit:
+        failure('provider_pagination_mismatch')
+    if pagination.get('has_more') and not rows:
+        failure('provider_pagination_mismatch')
     projected = []
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get('id'), str) or row.get('contactId') != query.contact_id:
