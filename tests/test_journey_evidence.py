@@ -114,3 +114,43 @@ def test_paginated_provider_cannot_exceed_requested_limit(resource):
     else:
         b = bridge_for((200, CONTACT), (200, {'submissions': rows, 'meta': {'currentPage': 1, 'nextPage': None}}))
     with pytest.raises(HTTPException): read(b, resource=resource, conversation_id='conv', limit=1)
+
+@pytest.mark.parametrize('direction,status,reply', [('outbound', 'delivered', None), ('inbound', 'read', 'original')])
+def test_individual_email_status_reply_metadata_privacy(direction, status, reply):
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    email = dict(conv, id='email', threadId='thread', conversationId='conv', direction=direction, status=status, replyToMessageId=reply, body='private', subject='private', to=['private'], error='private', source='workflow')
+    result = read(bridge_for((200, CONTACT), (200, conv), (200, email)), resource='email', conversation_id='conv', email_id='email')
+    assert result['records'][0]['status'] == status
+    assert result['records'][0]['replyToMessageId'] == reply
+    assert not {'body', 'subject', 'to', 'error'} & set(result['records'][0])
+    assert result['pagination']['complete'] is True
+
+@pytest.mark.parametrize('field,value', [('id', 'other'), ('contactId', 'other'), ('conversationId', 'other'), ('locationId', 'other'), ('threadId', {})])
+def test_email_identity_rejected(field, value):
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    email = dict(conv, id='email', threadId='thread', conversationId='conv')
+    email[field] = value
+    with pytest.raises(HTTPException):
+        read(bridge_for((200, CONTACT), (200, conv), (200, email)), resource='email', conversation_id='conv', email_id='email')
+
+def test_email_requires_both_ids():
+    for kwargs in ({}, {'conversation_id': 'conv'}, {'email_id': 'email'}):
+        with pytest.raises(ValidationError): EvidenceQuery(contact_id='person', resource='email', **kwargs)
+
+def test_message_email_ids_projection():
+    from journey_evidence import email_message_ids
+    assert email_message_ids({'meta': {'email': {'email': {'messageIds': ['email1', 'email2'], 'body': 'private'}, 'secret': 'private'}}}) == ['email1', 'email2']
+    assert email_message_ids({'meta': {'callDuration': 50}}) is None
+
+@pytest.mark.parametrize('ids', [[{'body': 'private'}], 'private', [None], ['../escape'], ['e'] * 51])
+def test_message_email_ids_malformed_rejected(ids):
+    from journey_evidence import email_message_ids
+    with pytest.raises(HTTPException): email_message_ids({'meta': {'email': {'email': {'messageIds': ids}}}})
+
+def test_default_submission_window_includes_current_utc_day():
+    from datetime import datetime, timezone, timedelta
+    q = EvidenceQuery(contact_id='person', resource='submissions')
+    assert q.end_date == datetime.now(timezone.utc).date() + timedelta(days=1)
+    assert (q.end_date - q.start_date).days == 30
+    result = read(bridge_for((200, CONTACT), (200, {'submissions': [], 'meta': {'currentPage': 1, 'nextPage': None}})), resource='submissions')
+    assert result['pagination']['end_date_exclusive'] is True

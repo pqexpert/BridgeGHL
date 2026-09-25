@@ -4,12 +4,13 @@ Owning work: RBO-97. This repair adds one read-only capability to the existing
 BridgeGHL service and MCP adapter; no new runtime, key, store or scheduler.
 
 `read_journey_evidence(contact_id, resource, conversation_id?, limit=20,
-cursor?, page=1, start_date?, end_date?)` calls authenticated
+cursor?, page=1, start_date?, end_date?, email_id?)` calls authenticated
 `POST /read/journey-evidence`. POST carries the query; every provider action is GET.
 
-Resources: conversations, messages, tasks, submissions. Each request first reads
-and validates the exact contact and configured location. Messages additionally
-validate the conversation parent. All returned children must match that contact;
+Resources: conversations, messages, tasks, submissions, email. Each request first reads
+and validates the exact contact and configured location. Messages and singular email reads additionally
+validate the conversation parent. Email requires an individual email_id; its
+returned ID, contact, location and conversation must all match. All returned children must match that contact;
 conversations and messages must match the location. Wrong resource envelopes,
 cross-contact/location data, failed scope/auth and missing pagination fail closed.
 No contact list is substituted for conversation evidence. Calls do not retry an
@@ -21,14 +22,21 @@ body/title, addresses, attachments or arbitrary metadata. Provider errors are no
 forwarded. Existing server-side PIT and bridge auth remain in their existing homes.
 
 Each invocation reads one bounded page (1–50 records); submissions require a window
-of at most 31 days (default last 30 days). Continue using the returned cursor/page
+of at most 31 days. end_date is exclusive; default is tomorrow UTC, with
+start_date 30 days earlier, so today’s submissions are included. The result
+explicitly marks end_date_exclusive and gives the queried window. Continue using the returned cursor/page
 only when needed. `complete` never certifies a full collection when starting midway.
 Task API lacks pagination; a truncated task response is explicitly incomplete.
 A page cap, missing cursor, error or unobserved window is not zero events.
 
 A native delivered status does not prove inbox receipt. This capability does not
 expose workflow enrollment/execution logs or accept complete customer journeys.
-Those remain independent native HighLevel evidence. No CRM write or message send
+Those remain independent native HighLevel evidence. Message-list records can be
+email threads rather than individual emails. Only the documented
+meta.email.email.messageIds array is projected as email_message_ids (up to50
+validated IDs); no arbitrary metadata is returned. Use these IDs with the singular
+email resource to read native status, direction, threadId and replyToMessageId.
+Absent status on a thread is not a delivery failure or proof of no reply. No CRM write or message send
 is enabled by this change. RSC/Income admitted work only; no Dzokden records.
 
 ## Deployment and proof
@@ -45,6 +53,7 @@ from passing source tests.
 - https://marketplace.gohighlevel.com/docs/ghl/conversations/search-conversation/
 - https://marketplace.gohighlevel.com/docs/ghl/conversations/get-conversation/
 - https://marketplace.gohighlevel.com/docs/ghl/conversations/get-messages/
+- https://marketplace.gohighlevel.com/docs/ghl/conversations/get-email-by-id/
 - https://marketplace.gohighlevel.com/docs/ghl/contacts/get-all-tasks/
 - https://marketplace.gohighlevel.com/docs/ghl/forms/get-forms-submissions/
 
