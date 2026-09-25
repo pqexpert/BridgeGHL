@@ -59,20 +59,35 @@ def next_cursor(value, previous=None, *, timestamp=False):
     return value
 
 def email_message_ids(row):
-    """Project only the documented email IDs, never arbitrary nested meta."""
+    """Read only the two allowlisted provider email-ID envelope shapes."""
     current = row
-    for key in ('meta', 'email', 'email'):
+    for key in ('meta', 'email'):
         if key not in current:
             return None
         current = current[key]
         if not isinstance(current, dict):
             failure('provider_resource_type_mismatch')
-    if 'messageIds' not in current:
+    candidates = []
+    if 'messageIds' in current:
+        candidates.append(current['messageIds'])
+    if 'email' in current:
+        nested = current['email']
+        if not isinstance(nested, dict):
+            failure('provider_resource_type_mismatch')
+        if 'messageIds' in nested:
+            candidates.append(nested['messageIds'])
+    if not candidates:
         return None
-    ids = current['messageIds']
-    if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(item, str) or not re.fullmatch(ID, item) for item in ids):
+    result = []
+    for ids in candidates:
+        if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(item, str) or not re.fullmatch(ID, item) for item in ids):
+            failure('provider_resource_type_mismatch')
+        for item in ids:
+            if item not in result:
+                result.append(item)
+    if len(result) > 50:
         failure('provider_resource_type_mismatch')
-    return ids[:]
+    return result
 
 def read_evidence(bridge, query):
     """Every read validates parent identity before admitting a child resource."""

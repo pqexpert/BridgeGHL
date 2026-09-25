@@ -154,3 +154,25 @@ def test_default_submission_window_includes_current_utc_day():
     assert (q.end_date - q.start_date).days == 30
     result = read(bridge_for((200, CONTACT), (200, {'submissions': [], 'meta': {'currentPage': 1, 'nextPage': None}})), resource='submissions')
     assert result['pagination']['end_date_exclusive'] is True
+
+def test_compact_email_ids_projected_through_full_reader():
+    conv = {'id': 'conv', 'contactId': 'person', 'locationId': 'location'}
+    row = dict(conv, id='thread', conversationId='conv', meta={'email': {'messageIds': ['email1', 'email2'], 'body': 'private'}})
+    b = bridge_for((200, CONTACT), (200, conv), (200, {'messages': {'messages': [row], 'nextPage': False}}))
+    result = read(b, resource='messages', conversation_id='conv')
+    assert result['records'][0]['email_message_ids'] == ['email1', 'email2']
+    assert 'meta' not in result['records'][0]
+    assert 'private' not in str(result)
+
+def test_both_email_id_shapes_are_unified_without_duplicates():
+    from journey_evidence import email_message_ids
+    assert email_message_ids({'meta': {'email': {'messageIds': ['one', 'two'], 'email': {'messageIds': ['two', 'three']}}}}) == ['one', 'two', 'three']
+
+@pytest.mark.parametrize('ids', [[{'body': 'private'}], 'private', ['../escape'], ['e'] * 51])
+def test_compact_email_ids_bad_shape_rejected_even_with_valid_nested(ids):
+    from journey_evidence import email_message_ids
+    with pytest.raises(HTTPException): email_message_ids({'meta': {'email': {'messageIds': ids, 'email': {'messageIds': ['valid']}}}})
+
+def test_combined_email_ids_remain_bounded():
+    from journey_evidence import email_message_ids
+    with pytest.raises(HTTPException): email_message_ids({'meta': {'email': {'messageIds': [str(i) for i in range(50)], 'email': {'messageIds': ['extra']}}}})
