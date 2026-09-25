@@ -33,8 +33,8 @@ A native delivered status does not prove inbox receipt. This capability does not
 expose workflow enrollment/execution logs or accept complete customer journeys.
 Those remain independent native HighLevel evidence. Message-list records can be
 email threads rather than individual emails. Only the documented
-meta.email.email.messageIds array is projected as email_message_ids (up to50
-validated IDs); no arbitrary metadata is returned. Use these IDs with the singular
+meta.email.email.messageIds and the compact meta.email.messageIds arrays are projected as email_message_ids (up to50
+validated unique IDs across both shapes); no arbitrary metadata is returned. Use these IDs with the singular
 email resource to read native status, direction, threadId and replyToMessageId.
 Absent status on a thread is not a delivery failure or proof of no reply. No CRM write or message send
 is enabled by this change. RSC/Income admitted work only; no Dzokden records.
@@ -70,3 +70,5 @@ Authority: owner-authorized September 25 journey-evidence repair; bounded existi
 service deployment. Negative boundaries: no customer writes/sends, new secret,
 new vendor/runtime/scheduler, Calendar write or Dzokden data. Material unknowns:
 production scope acceptance and worker app refresh until native proof.
+
+Singular email reads admit only one explicit root/emailMessage/email/message/data object. Exact email, contact, location and conversation identity remain mandatory. Missing threadId is returned as null; malformed or ambiguous envelopes fail closed.

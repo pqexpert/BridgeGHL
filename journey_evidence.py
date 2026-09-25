@@ -59,20 +59,54 @@ def next_cursor(value, previous=None, *, timestamp=False):
     return value
 
 def email_message_ids(row):
-    """Project only the documented email IDs, never arbitrary nested meta."""
+    """Read only the two allowlisted provider email-ID envelope shapes."""
     current = row
-    for key in ('meta', 'email', 'email'):
+    for key in ('meta', 'email'):
         if key not in current:
             return None
         current = current[key]
         if not isinstance(current, dict):
             failure('provider_resource_type_mismatch')
-    if 'messageIds' not in current:
+    candidates = []
+    if 'messageIds' in current:
+        candidates.append(current['messageIds'])
+    if 'email' in current:
+        nested = current['email']
+        if not isinstance(nested, dict):
+            failure('provider_resource_type_mismatch')
+        if 'messageIds' in nested:
+            candidates.append(nested['messageIds'])
+    if not candidates:
         return None
-    ids = current['messageIds']
-    if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(item, str) or not re.fullmatch(ID, item) for item in ids):
+    result = []
+    for ids in candidates:
+        if not isinstance(ids, list) or len(ids) > 50 or any(not isinstance(item, str) or not re.fullmatch(ID, item) for item in ids):
+            failure('provider_resource_type_mismatch')
+        for item in ids:
+            if item not in result:
+                result.append(item)
+    if len(result) > 50:
         failure('provider_resource_type_mismatch')
-    return ids[:]
+    return result
+
+def email_record(data, email_id):
+    """Normalize only explicit email envelopes; retain all identity checks."""
+    candidates = []
+    if 'id' in data:
+        candidates.append(data)
+    for key in ('emailMessage', 'email', 'message', 'data'):
+        value = data.get(key)
+        if isinstance(value, dict) and 'id' in value:
+            candidates.append(value)
+    if len(candidates) != 1:
+        failure('provider_email_envelope_ambiguous' if candidates else 'provider_email_envelope_unrecognized')
+    row = candidates[0]
+    if row.get('id') != email_id:
+        failure('provider_email_identity_mismatch')
+    thread_id = row.get('threadId')
+    if thread_id is not None and (not isinstance(thread_id, str) or not re.fullmatch(ID, thread_id)):
+        failure('provider_email_thread_type_mismatch')
+    return dict(row, threadId=thread_id)
 
 def read_evidence(bridge, query):
     """Every read validates parent identity before admitting a child resource."""
@@ -115,9 +149,7 @@ def read_evidence(bridge, query):
         pagination['next_cursor'] = next_cursor(rows[-1].get('lastMessageDate') if isinstance(rows[-1], dict) else None, query.cursor, timestamp=True) if more else None
     elif resource == 'email':
         data = get('/conversations/messages/email/' + query.email_id)
-        if data.get('id') != query.email_id or not isinstance(data.get('threadId'), str):
-            failure('provider_resource_type_mismatch')
-        rows = [data]
+        rows = [email_record(data, query.email_id)]
         pagination.update(limit=1, complete=True, has_more=False)
     elif resource == 'messages':
         params = {'limit': query.limit}
