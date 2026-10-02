@@ -4,12 +4,13 @@ from typing import Any, Optional, Literal
 from datetime import datetime, timezone
 import json
 import os
+import re
 import uuid
 
 import requests
 import time
 
-app = FastAPI(title="BridgeGHL", version="0.4.0")
+app = FastAPI(title="BridgeGHL", version="0.5.0")
 
 API_KEY = os.getenv("BRIDGE_API_KEY", "")
 HIGHLEVEL_PIT = os.getenv("HIGHLEVEL_PIT", "")
@@ -34,7 +35,15 @@ APPROVED_CONTACT_TAGS = parse_csv_env("HIGHLEVEL_APPROVED_CONTACT_TAGS")
 ALLOWED_ACTIONS = {
     "update_opportunity",
     "normalize_contact_tags",
+    "create_task",
+    "delete_task",
 }
+
+TASK_ACTION_PREFIX = "launch17-next-action:v1:"
+TASK_ACTION_KEY_RE = re.compile(
+    r"^launch17-next-action:v1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:(?:0[1-9]|1[0-7])$"
+)
+SAFE_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 ALLOWED_OPPORTUNITY_STATUSES = {"open", "won", "lost", "abandoned"}
 
@@ -59,6 +68,21 @@ class ContactTagMutationRequest(BaseModel):
     reason: str
 
 
+class TaskCreateRequest(BaseModel):
+    contact_id: str
+    action_key: str
+    due_date: str
+    assigned_to: Optional[str] = None
+    reason: str
+
+
+class TaskDeleteRequest(BaseModel):
+    contact_id: str
+    task_id: str
+    action_key: str
+    reason: str
+
+
 class DryRunResponse(BaseModel):
     accepted: bool
     mode: Literal["dry_run"]
@@ -72,6 +96,19 @@ class ExecuteResponse(BaseModel):
     mode: Literal["execute"]
     action: str
     audit_id: str
+    highlevel_statuses: list[dict]
+    readback_status: Optional[int] = None
+    verified: bool
+    verification: dict
+
+
+class TaskExecuteResponse(BaseModel):
+    accepted: bool
+    mode: Literal["execute"]
+    action: Literal["create_task", "delete_task"]
+    effect: Literal["CREATED", "NO_CHANGE_EXACT_REPLAY", "DELETED", "UNRESOLVED"]
+    audit_id: str
+    task_id: Optional[str] = None
     highlevel_statuses: list[dict]
     readback_status: Optional[int] = None
     verified: bool
@@ -121,6 +158,30 @@ def normalize_opportunity_changes(changes: OpportunityChanges) -> OpportunityCha
 
 def normalize_tags(tags: list[str]) -> list[str]:
     return sorted({tag.strip() for tag in tags if tag and tag.strip()})
+
+
+def normalize_due_date(value: str) -> str:
+    raw = value.strip()
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("due_date must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def task_title(action_key: str) -> str:
+    return f"Launch17 next action | {action_key}"
+
+
+def build_task_create_body(payload: TaskCreateRequest) -> dict:
+    body: dict[str, Any] = {
+        "title": task_title(payload.action_key),
+        "body": f"Governed exact-event action. No outreach or Calendar authority. {payload.action_key}",
+        "dueDate": normalize_due_date(payload.due_date),
+        "completed": False,
+    }
+    if payload.assigned_to:
+        body["assignedTo"] = payload.assigned_to
+    return body
 
 
 def validate_opportunity_request(payload: OpportunityUpdateRequest) -> dict:
@@ -182,13 +243,43 @@ def validate_contact_tag_request(payload: ContactTagMutationRequest) -> dict:
     }
 
 
+def validate_task_create_request(payload: TaskCreateRequest) -> dict:
+    errors: list[str] = []
+    if not payload.contact_id or not SAFE_PROVIDER_ID_RE.fullmatch(payload.contact_id):
+        errors.append("contact_id must be a non-empty provider ID")
+    if not payload.reason:
+        errors.append("reason is required")
+    if not TASK_ACTION_KEY_RE.fullmatch(payload.action_key):
+        errors.append("action_key must be an exact Launch17 event key for door 01-17")
+    if payload.assigned_to and not SAFE_PROVIDER_ID_RE.fullmatch(payload.assigned_to):
+        errors.append("assigned_to must be a provider ID")
+    try:
+        normalize_due_date(payload.due_date)
+    except (TypeError, ValueError):
+        errors.append("due_date must be an ISO-8601 timestamp with timezone")
+    return {"valid": not errors, "errors": errors}
+
+
+def validate_task_delete_request(payload: TaskDeleteRequest) -> dict:
+    errors: list[str] = []
+    if not payload.contact_id or not SAFE_PROVIDER_ID_RE.fullmatch(payload.contact_id):
+        errors.append("contact_id must be a non-empty provider ID")
+    if not payload.task_id or not SAFE_PROVIDER_ID_RE.fullmatch(payload.task_id):
+        errors.append("task_id must be a non-empty provider ID")
+    if not payload.reason:
+        errors.append("reason is required")
+    if not TASK_ACTION_KEY_RE.fullmatch(payload.action_key):
+        errors.append("action_key must be an exact Launch17 event key for door 01-17")
+    return {"valid": not errors, "errors": errors}
+
+
 def highlevel_headers(redacted: bool = False) -> dict:
     return {
         "Authorization": "Bearer ***redacted***" if redacted else f"Bearer {HIGHLEVEL_PIT}",
         "Version": "v3",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "BridgeGHL/0.4.0",
+        "User-Agent": "BridgeGHL/0.5.0",
     }
 
 
@@ -240,6 +331,14 @@ def contact_endpoint(contact_id: str) -> str:
 
 def contact_tags_endpoint(contact_id: str) -> str:
     return f"{HIGHLEVEL_BASE_URL.rstrip('/')}/contacts/{contact_id}/tags"
+
+
+def contact_tasks_endpoint(contact_id: str) -> str:
+    return f"{HIGHLEVEL_BASE_URL.rstrip('/')}/contacts/{contact_id}/tasks"
+
+
+def contact_task_endpoint(contact_id: str, task_id: str) -> str:
+    return f"{contact_tasks_endpoint(contact_id)}/{task_id}"
 
 
 def build_opportunity_update_body(changes: OpportunityChanges) -> dict:
@@ -360,6 +459,58 @@ def verify_contact_tags(projected: dict, tags_add: list[str], tags_remove: list[
         *[{"tag": tag, "operation": "remove", "ok": tag not in actual} for tag in tags_remove],
     ]
     return {"ok": bool(checks) and all(check["ok"] for check in checks), "checks": checks}
+
+
+def unwrap_task_list(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    tasks = data.get("tasks")
+    return [task for task in tasks if isinstance(task, dict)] if isinstance(tasks, list) else []
+
+
+def contact_belongs_to_location(data: dict, contact_id: str) -> bool:
+    record = unwrap_record(data, "contact")
+    return (
+        str(record.get("id") or "") == contact_id
+        and str(record.get("locationId") or "") == HIGHLEVEL_LOCATION_ID
+    )
+
+
+def project_task(data: dict) -> dict:
+    record = unwrap_record(data, "task")
+    return {
+        "id": record.get("id"),
+        "contactId": record.get("contactId"),
+        "assignedTo": record.get("assignedTo"),
+        "dueDate": record.get("dueDate"),
+        "completed": record.get("completed"),
+        "title": record.get("title"),
+    }
+
+
+def verify_task(projected: dict, payload: TaskCreateRequest) -> dict:
+    checks = [
+        {"field": "title", "ok": projected.get("title") == task_title(payload.action_key)},
+        {"field": "contactId", "ok": projected.get("contactId") == payload.contact_id},
+        {"field": "completed", "ok": projected.get("completed") is False},
+    ]
+    try:
+        actual_due = normalize_due_date(str(projected.get("dueDate") or ""))
+    except (TypeError, ValueError):
+        actual_due = None
+    checks.append({"field": "dueDate", "ok": actual_due == normalize_due_date(payload.due_date)})
+    if payload.assigned_to:
+        checks.append({"field": "assignedTo", "ok": projected.get("assignedTo") == payload.assigned_to})
+    return {"ok": all(check["ok"] for check in checks), "checks": checks}
+
+
+def verify_task_identity(projected: dict, payload: TaskDeleteRequest) -> dict:
+    checks = [
+        {"field": "id", "ok": projected.get("id") == payload.task_id},
+        {"field": "contactId", "ok": projected.get("contactId") == payload.contact_id},
+        {"field": "title", "ok": projected.get("title") == task_title(payload.action_key)},
+    ]
+    return {"ok": all(check["ok"] for check in checks), "checks": checks}
 
 
 def bridge_health_snapshot() -> BridgeHealthResponse:
@@ -734,6 +885,313 @@ def execute_contact_tags(
         verified=verification["ok"],
         verification=verification,
     )
+
+@app.post("/dry-run/task/create", response_model=DryRunResponse)
+def dry_run_task_create(
+    payload: TaskCreateRequest,
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None),
+):
+    require_api_key(x_api_key)
+    try:
+        due_date = normalize_due_date(payload.due_date)
+    except (TypeError, ValueError):
+        due_date = payload.due_date.strip()
+    normalized = TaskCreateRequest(
+        contact_id=payload.contact_id.strip(),
+        action_key=payload.action_key.strip(),
+        due_date=due_date,
+        assigned_to=normalize_string(payload.assigned_to),
+        reason=payload.reason.strip(),
+    )
+    validation = validate_task_create_request(normalized)
+    if not validation["valid"]:
+        raise HTTPException(status_code=422, detail=validation)
+    return DryRunResponse(
+        accepted=True,
+        mode="dry_run",
+        action="create_task",
+        validation=validation,
+        outbound_request={
+            "method": "POST",
+            "url": contact_tasks_endpoint(normalized.contact_id),
+            "headers": highlevel_headers(redacted=True),
+            "json": build_task_create_body(normalized),
+            "dedupe": {"match": "exact derived title", "effect": "NO_CHANGE_EXACT_REPLAY"},
+            "caller_ip": caller_ip(request),
+            "bridge_state": bridge_health_snapshot().state,
+            "rollback_notes": [
+                "execute validates the contact belongs to the configured location",
+                "execute reads all contact tasks and suppresses one exact replay",
+                "cleanup is permitted only through the exact task ID and action key",
+            ],
+        },
+    )
+
+
+@app.post("/execute/task/create", response_model=TaskExecuteResponse)
+def execute_task_create(
+    payload: TaskCreateRequest,
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None),
+):
+    require_api_key(x_api_key)
+    execute_guard("create_task")
+    try:
+        due_date = normalize_due_date(payload.due_date)
+    except (TypeError, ValueError):
+        due_date = payload.due_date.strip()
+    normalized = TaskCreateRequest(
+        contact_id=payload.contact_id.strip(),
+        action_key=payload.action_key.strip(),
+        due_date=due_date,
+        assigned_to=normalize_string(payload.assigned_to),
+        reason=payload.reason.strip(),
+    )
+    validation = validate_task_create_request(normalized)
+    if not validation["valid"]:
+        raise HTTPException(status_code=422, detail=validation)
+
+    contact_status, contact_data = highlevel_request("GET", contact_endpoint(normalized.contact_id))
+    if not 200 <= contact_status < 300 or not contact_belongs_to_location(contact_data, normalized.contact_id):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "contact_location_validation_failed", "status": contact_status},
+        )
+
+    list_status, list_data = highlevel_request("GET", contact_tasks_endpoint(normalized.contact_id))
+    if not 200 <= list_status < 300:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "pre_write_task_read_failed", "status": list_status},
+        )
+    matches = [
+        task for task in unwrap_task_list(list_data)
+        if task.get("title") == task_title(normalized.action_key)
+    ]
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "duplicate_action_key_conflict", "match_count": len(matches)},
+        )
+
+    audit_id = str(uuid.uuid4())
+    statuses: list[dict] = [
+        {"operation": "read_contact", "status": contact_status},
+        {"operation": "list_tasks", "status": list_status},
+    ]
+
+    if len(matches) == 1:
+        task_id = str(matches[0].get("id") or "")
+        if not task_id:
+            raise HTTPException(status_code=409, detail={"error": "exact_replay_missing_task_id"})
+        readback_status, readback_data = highlevel_request(
+            "GET", contact_task_endpoint(normalized.contact_id, task_id)
+        )
+        projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
+        verification = verify_task(projected, normalized) if projected else {"ok": False, "checks": []}
+        if not verification["ok"]:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "existing_action_key_state_conflict", "task_id": task_id},
+            )
+        append_audit_log({
+            "audit_id": audit_id,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "create_task",
+            "mode": "execute",
+            "caller_ip": caller_ip(request),
+            "target_id": normalized.contact_id,
+            "action_key": normalized.action_key,
+            "reason": normalized.reason,
+            "effect": "NO_CHANGE_EXACT_REPLAY",
+            "task_id": task_id,
+            "statuses": statuses + [{"operation": "read_task", "status": readback_status}],
+            "verified": True,
+            "result": "verified_exact_replay",
+        })
+        return TaskExecuteResponse(
+            accepted=True,
+            mode="execute",
+            action="create_task",
+            effect="NO_CHANGE_EXACT_REPLAY",
+            audit_id=audit_id,
+            task_id=task_id,
+            highlevel_statuses=statuses,
+            readback_status=readback_status,
+            verified=True,
+            verification=verification,
+        )
+
+    write_status, write_data = highlevel_request(
+        "POST",
+        contact_tasks_endpoint(normalized.contact_id),
+        body=build_task_create_body(normalized),
+        retry_reads=False,
+    )
+    statuses.append({"operation": "create_task", "status": write_status})
+    created = unwrap_record(write_data, "task") if 200 <= write_status < 300 else {}
+    task_id = str(created.get("id") or "")
+    readback_status: Optional[int] = None
+    projected: dict = {}
+    if task_id:
+        readback_status, readback_data = highlevel_request(
+            "GET", contact_task_endpoint(normalized.contact_id, task_id)
+        )
+        projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
+        statuses.append({"operation": "read_task", "status": readback_status})
+    verification = verify_task(projected, normalized) if projected else {"ok": False, "checks": []}
+    verified = bool(200 <= write_status < 300 and verification["ok"])
+    append_audit_log({
+        "audit_id": audit_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "create_task",
+        "mode": "execute",
+        "caller_ip": caller_ip(request),
+        "target_id": normalized.contact_id,
+        "action_key": normalized.action_key,
+        "reason": normalized.reason,
+        "requested": build_task_create_body(normalized),
+        "effect": "CREATED" if 200 <= write_status < 300 else "UNRESOLVED",
+        "task_id": task_id or None,
+        "statuses": statuses,
+        "readback_status": readback_status,
+        "verified": verified,
+        "result": "verified" if verified else "needs_runtime_verification",
+    })
+    return TaskExecuteResponse(
+        accepted=200 <= write_status < 300,
+        mode="execute",
+        action="create_task",
+        effect="CREATED" if 200 <= write_status < 300 else "UNRESOLVED",
+        audit_id=audit_id,
+        task_id=task_id or None,
+        highlevel_statuses=statuses,
+        readback_status=readback_status,
+        verified=verified,
+        verification=verification,
+    )
+
+
+@app.post("/dry-run/task/delete", response_model=DryRunResponse)
+def dry_run_task_delete(
+    payload: TaskDeleteRequest,
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None),
+):
+    require_api_key(x_api_key)
+    normalized = TaskDeleteRequest(
+        contact_id=payload.contact_id.strip(),
+        task_id=payload.task_id.strip(),
+        action_key=payload.action_key.strip(),
+        reason=payload.reason.strip(),
+    )
+    validation = validate_task_delete_request(normalized)
+    if not validation["valid"]:
+        raise HTTPException(status_code=422, detail=validation)
+    return DryRunResponse(
+        accepted=True,
+        mode="dry_run",
+        action="delete_task",
+        validation=validation,
+        outbound_request={
+            "method": "DELETE",
+            "url": contact_task_endpoint(normalized.contact_id, normalized.task_id),
+            "headers": highlevel_headers(redacted=True),
+            "precondition": "exact task ID, contact ID and derived action-key title must match",
+            "caller_ip": caller_ip(request),
+            "bridge_state": bridge_health_snapshot().state,
+            "rollback_notes": ["deletion is limited to an exact governed Launch17 task"],
+        },
+    )
+
+
+@app.post("/execute/task/delete", response_model=TaskExecuteResponse)
+def execute_task_delete(
+    payload: TaskDeleteRequest,
+    request: Request,
+    x_api_key: Optional[str] = Header(default=None),
+):
+    require_api_key(x_api_key)
+    execute_guard("delete_task")
+    normalized = TaskDeleteRequest(
+        contact_id=payload.contact_id.strip(),
+        task_id=payload.task_id.strip(),
+        action_key=payload.action_key.strip(),
+        reason=payload.reason.strip(),
+    )
+    validation = validate_task_delete_request(normalized)
+    if not validation["valid"]:
+        raise HTTPException(status_code=422, detail=validation)
+
+    contact_status, contact_data = highlevel_request("GET", contact_endpoint(normalized.contact_id))
+    if not 200 <= contact_status < 300 or not contact_belongs_to_location(contact_data, normalized.contact_id):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "contact_location_validation_failed", "status": contact_status},
+        )
+    before_status, before_data = highlevel_request(
+        "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id)
+    )
+    before = project_task(before_data) if 200 <= before_status < 300 else {}
+    identity = verify_task_identity(before, normalized) if before else {"ok": False, "checks": []}
+    if not identity["ok"]:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "task_identity_validation_failed", "status": before_status},
+        )
+
+    delete_status, _ = highlevel_request(
+        "DELETE",
+        contact_task_endpoint(normalized.contact_id, normalized.task_id),
+        retry_reads=False,
+    )
+    readback_status, _ = highlevel_request(
+        "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id)
+    )
+    verified = 200 <= delete_status < 300 and readback_status == 404
+    audit_id = str(uuid.uuid4())
+    statuses = [
+        {"operation": "read_contact", "status": contact_status},
+        {"operation": "read_task", "status": before_status},
+        {"operation": "delete_task", "status": delete_status},
+        {"operation": "read_deleted_task", "status": readback_status},
+    ]
+    verification = {
+        "ok": verified,
+        "checks": [
+            {"field": "identity", "ok": identity["ok"]},
+            {"field": "provider_readback_404", "ok": readback_status == 404},
+        ],
+    }
+    append_audit_log({
+        "audit_id": audit_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "delete_task",
+        "mode": "execute",
+        "caller_ip": caller_ip(request),
+        "target_id": normalized.contact_id,
+        "action_key": normalized.action_key,
+        "reason": normalized.reason,
+        "effect": "DELETED" if 200 <= delete_status < 300 else "UNRESOLVED",
+        "task_id": normalized.task_id,
+        "statuses": statuses,
+        "verified": verified,
+        "result": "verified" if verified else "needs_runtime_verification",
+    })
+    return TaskExecuteResponse(
+        accepted=200 <= delete_status < 300,
+        mode="execute",
+        action="delete_task",
+        effect="DELETED" if 200 <= delete_status < 300 else "UNRESOLVED",
+        audit_id=audit_id,
+        task_id=normalized.task_id,
+        highlevel_statuses=statuses,
+        readback_status=readback_status,
+        verified=verified,
+        verification=verification,
+    )
+
 
 # Source imports are separately enabled and remain inside this bridge's boundary.
 import sys
