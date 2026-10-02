@@ -134,8 +134,8 @@ jobs:
                 --header 'Content-Type: application/json' \
                 --header 'Accept: application/json, text/event-stream' \
                 --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' \
-                http://127.0.0.1:8001/mcp | python3 -c 'import json,sys; tools=json.load(sys.stdin)["result"]["tools"]; assert any(t["name"] == "read_journey_evidence" for t in tools)'
-              echo "journey_evidence_tool_discovered=true"
+                http://127.0.0.1:8001/mcp | python3 -c 'import json,sys; names={t["name"] for t in json.load(sys.stdin)["result"]["tools"]}; required={"read_journey_evidence","dry_run_task_create","execute_task_create","dry_run_task_delete","execute_task_delete"}; assert required <= names, required - names'
+              echo "journey_evidence_and_task_tools_discovered=true"
               echo "loopback_mcp_health_verified=true"
               exit 0
             fi

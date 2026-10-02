@@ -1,0 +1,32 @@
+name: Validate BridgeGHL
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - app.py
+      - mcp_server.py
+      - journey_evidence.py
+      - ingestion.py
+      - requirements.txt
+      - tests/**
+      - .github/workflows/validate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install and validate
+        run: |
+          python -m pip install -r requirements.txt pytest 'mcp==2.2.0'
+          python -m py_compile app.py mcp_server.py
+          python -m pytest -q

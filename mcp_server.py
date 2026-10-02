@@ -107,6 +107,64 @@ def execute_contact_tags(contact_id: str, reason: str, tags_add: list[str], tags
 
 
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+def dry_run_task_create(
+    contact_id: str,
+    action_key: str,
+    due_date: str,
+    reason: str,
+    assigned_to: str | None = None,
+) -> dict:
+    """Validate one exact Launch17 task create without mutation."""
+    return _call("/dry-run/task/create", {
+        "contact_id": contact_id,
+        "action_key": action_key,
+        "due_date": due_date,
+        "assigned_to": assigned_to,
+        "reason": reason,
+    })
+
+
+@SERVER.tool()
+def execute_task_create(
+    contact_id: str,
+    action_key: str,
+    due_date: str,
+    reason: str,
+    assigned_to: str | None = None,
+) -> dict:
+    """Create one exact Launch17 task with replay suppression and native readback."""
+    return _call("/execute/task/create", {
+        "contact_id": contact_id,
+        "action_key": action_key,
+        "due_date": due_date,
+        "assigned_to": assigned_to,
+        "reason": reason,
+    })
+
+
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+def dry_run_task_delete(contact_id: str, task_id: str, action_key: str, reason: str) -> dict:
+    """Validate exact cleanup of a governed Launch17 task without mutation."""
+    return _call("/dry-run/task/delete", {
+        "contact_id": contact_id,
+        "task_id": task_id,
+        "action_key": action_key,
+        "reason": reason,
+    })
+
+
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True))
+def execute_task_delete(contact_id: str, task_id: str, action_key: str, reason: str) -> dict:
+    """Delete only the task matching the exact contact, task ID and Launch17 action key."""
+    return _call("/execute/task/delete", {
+        "contact_id": contact_id,
+        "task_id": task_id,
+        "action_key": action_key,
+        "reason": reason,
+    })
+
+
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
 def read_journey_evidence(contact_id: str, resource: Literal["conversations", "messages", "tasks", "submissions", "email"],
                           conversation_id: str | None = None,
                           limit: Annotated[int, Field(ge=1, le=50)] = 20,
