@@ -90,3 +90,80 @@ def test_verification_requires_requested_state():
 
 def test_v3_header_is_explicit():
     assert bridge.highlevel_headers(redacted=True)["Version"] == "v3"
+
+
+def test_task_action_key_is_exact_and_bounded():
+    payload = bridge.TaskCreateRequest(
+        contact_id="contact-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:07",
+        due_date="2026-10-15T12:00:00Z",
+        reason="synthetic acceptance",
+    )
+    assert bridge.validate_task_create_request(payload)["valid"] is True
+
+    payload.action_key = "launch17-next-action:v1:location1:form1:submission1:18"
+    result = bridge.validate_task_create_request(payload)
+    assert result["valid"] is False
+    assert any("door 01-17" in error for error in result["errors"])
+
+
+def test_task_payload_is_derived_and_has_no_send_surface():
+    payload = bridge.TaskCreateRequest(
+        contact_id="contact-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:13",
+        due_date="2026-10-15T08:00:00-04:00",
+        assigned_to="owner-1",
+        reason="synthetic acceptance",
+    )
+    body = bridge.build_task_create_body(payload)
+    assert body["title"] == (
+        "Launch17 next action | "
+        "launch17-next-action:v1:location1:form1:submission1:13"
+    )
+    assert body["dueDate"] == "2026-10-15T12:00:00Z"
+    assert body["completed"] is False
+    assert body["assignedTo"] == "owner-1"
+    assert set(body) == {"title", "body", "dueDate", "completed", "assignedTo"}
+
+
+def test_task_verification_requires_exact_native_state():
+    payload = bridge.TaskCreateRequest(
+        contact_id="contact-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:17",
+        due_date="2026-10-15T12:00:00Z",
+        reason="synthetic acceptance",
+    )
+    projected = {
+        "id": "task-1",
+        "contactId": "contact-1",
+        "assignedTo": None,
+        "dueDate": "2026-10-15T12:00:00.000Z",
+        "completed": False,
+        "title": bridge.task_title(payload.action_key),
+    }
+    assert bridge.verify_task(projected, payload)["ok"] is True
+    projected["completed"] = True
+    assert bridge.verify_task(projected, payload)["ok"] is False
+
+
+def test_task_delete_requires_exact_identity():
+    payload = bridge.TaskDeleteRequest(
+        contact_id="contact-1",
+        task_id="task-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:16",
+        reason="cleanup",
+    )
+    projected = {
+        "id": "task-1",
+        "contactId": "contact-1",
+        "title": bridge.task_title(payload.action_key),
+    }
+    assert bridge.verify_task_identity(projected, payload)["ok"] is True
+    projected["title"] = "Unrelated task"
+    assert bridge.verify_task_identity(projected, payload)["ok"] is False
+
+
+def test_health_allowlist_admits_only_bounded_task_actions():
+    assert {"create_task", "delete_task"}.issubset(bridge.ALLOWED_ACTIONS)
+    assert "send_message" not in bridge.ALLOWED_ACTIONS
+    assert "create_contact" not in bridge.ALLOWED_ACTIONS
