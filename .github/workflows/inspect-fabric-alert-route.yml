@@ -73,6 +73,51 @@ jobs:
           from inspect_fabric_alert_route import GROUPS
           print(json.dumps({'stage': 'FABRIC_ALERT_RUNNER_PREFLIGHT', 'groups': {name: {'complete': all(os.environ.get(k) for k in keys), 'present_fields': [k for k in keys if os.environ.get(k)]} for name, keys in GROUPS.items()}, 'recipient_configured': bool(os.environ.get('FABRIC_ALERT_TO')), 'external_messages': 0}))
           PYCODE
+      - name: Inspect migration binding names and native services
+        env:
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os, urllib.request, urllib.parse, subprocess, shlex
+          base='https://api.github.com/repos/pqexpert/BridgeGHL'
+          def get(path):
+              req=urllib.request.Request(base+path, headers={'Authorization':'Bearer '+os.environ['SOURCE_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req, timeout=20) as response: return json.load(response)
+          result={}
+          for env in get('/environments?per_page=100').get('environments',[]):
+              name=env['name']
+              try:
+                  data=get('/environments/'+urllib.parse.quote(name,safe='')+'/secrets?per_page=100')
+                  result[name]={'names':[s['name'] for s in data.get('secrets',[])], 'total_count':data.get('total_count')}
+              except Exception as exc: result[name]={'error_type':type(exc).__name__}
+          print(json.dumps({'stage':'FABRIC_MIGRATION_SECRET_NAMES','environments':result}))
+          code = """
+          import json, pathlib, subprocess
+          out={'services':{},'configs':{}}
+          for name in ['bridgeghl','bridgeghl-mcp','ziji-distiller']:
+              p=subprocess.run(['systemctl','is-active',name+'.service'],capture_output=True,text=True,timeout=5)
+              out['services'][name]=p.stdout.strip()
+          for path in ['/etc/ziji-fabric/provider.json','/etc/ziji-fabric/alerts.json','/etc/bridgeghl/bridgeghl.env']:
+              p=pathlib.Path(path)
+              if p.is_file() and not p.is_symlink() and p.stat().st_size<65536:
+                  body=p.read_text()
+                  keys=sorted(json.loads(body)) if path.endswith('.json') else sorted(line.split('=',1)[0].strip() for line in body.splitlines() if '=' in line and not line.lstrip().startswith('#'))
+                  out['configs'][path]={'exists':True,'field_names':keys}
+              else: out['configs'][path]={'exists':False}
+          for path in ['/var/lib/ziji-fabric/dispatch-shadow/latest.json','/var/lib/ziji-fabric/alerts/latest.json']:
+              p=pathlib.Path(path)
+              if p.is_file() and not p.is_symlink() and p.stat().st_size<65536:
+                  d=json.loads(p.read_text())
+                  out[path]={k:d[k] for k in ['observed_at_utc','observed_at','checks','alerts','outcome','model_calls'] if k in d}
+          print(json.dumps(out))
+          """
+          cmd=['ssh','-i',os.path.expanduser('~/.ssh/fabric-preflight'),'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+os.path.expanduser('~/.ssh/fabric-known-hosts'),os.environ['REMOTE_USER']+'@'+os.environ['REMOTE_HOST'],'sudo -n python3 -c '+shlex.quote(code)]
+          p=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
+          if p.returncode: raise SystemExit('Native migration inventory failed; details withheld')
+          print(json.dumps({'stage':'FABRIC_MIGRATION_NATIVE','inventory':json.loads(p.stdout)}))
+          PYCODE
       - name: Remove temporary SSH material
         if: always()
         run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
