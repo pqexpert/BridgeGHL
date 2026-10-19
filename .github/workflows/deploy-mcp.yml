@@ -68,6 +68,24 @@ jobs:
           if [[ $(id -u) -ne 0 ]]; then privilege=(sudo -n); fi
           test -s "$source_file"
           "${privilege[@]}" test -s /etc/bridgeghl/bridgeghl.env
+          # The adapter and bridge deploy independently. Keep the current adapter
+          # active until the live backend advertises the matching task contract.
+          backend_ready=false
+          for attempt in {1..36}; do
+            if curl --max-time 8 --fail --silent --show-error \
+              http://127.0.0.1:8000/openapi.json | python3 -c '
+          import json, sys
+          document = json.load(sys.stdin)
+          assert document["info"]["version"] == "0.6.0"
+          required = {"/dry-run/task/create", "/execute/task/create", "/dry-run/task/delete", "/execute/task/delete"}
+          assert required <= set(document["paths"])
+          '; then
+              backend_ready=true
+              break
+            fi
+            sleep 5
+          done
+          [[ "$backend_ready" == true ]]
           if ! command -v python3.11 >/dev/null; then
             "${privilege[@]}" dnf -y install python3.11 python3.11-pip
           fi
@@ -129,6 +147,26 @@ jobs:
                   except ValueError: return False
               return False
           assert healthy(json.load(sys.stdin))
+          '
+              printf '%s' "$health" | python3 -c '
+          import json, sys
+          def payload(v):
+              if isinstance(v, dict):
+                  if v.get("plugin_contract"): return v
+                  for item in v.values():
+                      found = payload(item)
+                      if found: return found
+              if isinstance(v, list):
+                  for item in v:
+                      found = payload(item)
+                      if found: return found
+              if isinstance(v, str) and v.startswith("{"):
+                  try: return payload(json.loads(v))
+                  except ValueError: return None
+              return None
+          result = payload(json.load(sys.stdin))
+          assert result["plugin_contract"]["version"] == "rsc-command-center-plugin/v1"
+          assert result["task_writes_enabled"] is True
           '
               curl --max-time 8 --fail --silent --show-error \
                 --header 'Content-Type: application/json' \
