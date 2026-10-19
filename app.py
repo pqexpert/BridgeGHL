@@ -474,6 +474,25 @@ def unwrap_task_list(data: dict) -> list[dict]:
     return [task for task in tasks if isinstance(task, dict)] if isinstance(tasks, list) else []
 
 
+def task_absent_from_complete_list(data: dict, contact_id: str, task_id: str, action_key: str) -> bool:
+    """Fail closed on malformed, foreign or paginated task-list responses.
+
+    The provider's Get all Tasks contract is an unpaginated tasks array.
+    A 400 from a deleted task's direct GET is NOT absence evidence by itself.
+    """
+    if not isinstance(data, dict) or not set(data) <= {"tasks", "traceId"}:
+        return False
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return False
+    for task in tasks:
+        if not isinstance(task, dict) or not task.get("id") or task.get("contactId") != contact_id:
+            return False
+        if task["id"] == task_id or task.get("title") == task_title(action_key):
+            return False
+    return True
+
+
 def contact_belongs_to_location(data: dict, contact_id: str) -> bool:
     record = unwrap_record(data, "contact")
     return (
@@ -1231,6 +1250,15 @@ def execute_task_delete(
             "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id), timeout=15
         )
         statuses.append({"operation": "read_deleted_task", "status": readback_status})
+        list_absence = False
+        if 200 <= delete_status < 300 and readback_status == 400:
+            list_status, list_data = highlevel_request(
+                "GET", contact_tasks_endpoint(normalized.contact_id), timeout=15
+            )
+            statuses.append({"operation": "read_all_tasks_after_delete", "status": list_status})
+            list_absence = list_status == 200 and task_absent_from_complete_list(
+                list_data, normalized.contact_id, normalized.task_id, normalized.action_key
+            )
     except requests.RequestException as exc:
         append_audit_log({
             "audit_id": audit_id,
@@ -1254,13 +1282,15 @@ def execute_task_delete(
             detail={"error": "provider_mutation_outcome_unknown", "audit_id": audit_id,
                     "task_id": normalized.task_id},
         ) from exc
-    verified = 200 <= delete_status < 300 and readback_status == 404
+    absence_verified = readback_status == 404 or list_absence
+    verified = 200 <= delete_status < 300 and absence_verified
     verification = {
         "ok": verified,
         "checks": [
             {"field": "identity", "ok": identity["ok"]},
-            {"field": "provider_readback_404", "ok": readback_status == 404},
+            {"field": "provider_absence_readback", "ok": absence_verified},
         ],
+        "absence_method": "complete_task_list" if list_absence else "direct_get_404" if readback_status == 404 else "unverified",
     }
     append_audit_log({
         "audit_id": audit_id,
