@@ -35,7 +35,7 @@ class ShadowTests(unittest.TestCase):
             with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(result))):
                 shadow.sample()
                 shadow.sample()
-            self.assertEqual(json.loads((Path(tmp)/"previous.json").read_text()), result)
+            self.assertEqual(json.loads((Path(tmp)/"previous.json").read_text()), {**result, "trigger": "immediate_validation"})
             self.assertEqual((Path(tmp)/"latest.json").stat().st_mode & 0o777, 0o600)
             self.assertEqual(len(list(Path(tmp).glob("*.json"))), 2)
 

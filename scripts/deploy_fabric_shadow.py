@@ -47,7 +47,7 @@ def atomic(path, content, mode):
             os.unlink(tmp)
 
 
-def sample():
+def sample(trigger="immediate_validation"):
     """Local-only observation with bounded storage and no send/write capability."""
     import fcntl
     with (STATE / "run.lock").open("a") as lock:
@@ -61,6 +61,7 @@ def sample():
         if value.get("mode") != "shadow_read_only" or any(value.get(k) != 0 for k in
                 ("model_calls", "calendar_writes", "external_messages", "crm_writes")):
             raise ValueError("shadow_boundary_failed")
+        value["trigger"] = trigger
         latest = STATE / "latest.json"
         if latest.exists():
             atomic(STATE / "previous.json", latest.read_text(), 0o600)
@@ -93,6 +94,10 @@ def install(files):
     cron_text = "# Governed read-only Dispatch shadow; no provider/model calls or sends.\n17 * * * * root /usr/bin/python3 /opt/ziji-fabric/dispatch/shadow_runner.py --sample >/dev/null 2>&1\n"
     if old is not None and old != cron_text:
         raise ValueError("existing_cron_conflict")
+    prior_scheduled = False
+    if (STATE / "latest.json").exists():
+        prior = json.loads((STATE / "latest.json").read_text())
+        prior_scheduled = prior.get("trigger") == "cron"
     try:
         first = sample()
         second = sample()
@@ -110,7 +115,7 @@ def install(files):
         raise
     return {"stage": "FABRIC_SHADOW_INSTALL", "source_sha": SOURCE_SHA,
             "cron_installed": True, "two_immediate_readbacks": True,
-            "scheduled_cycle_verified": False, "hosted_tasks_disabled": False,
+            "scheduled_cycle_verified": prior_scheduled, "hosted_tasks_disabled": False,
             "services": second["checks"], "alert_count": len(second["alerts"]),
             "model_calls": 0, "external_messages": 0, "calendar_writes": 0, "crm_writes": 0}
 
@@ -152,7 +157,7 @@ def deploy():
 if __name__ == "__main__":
     try:
         if sys.argv[1:] == ["--sample"]:
-            sample()
+            sample("cron")
         else:
             deploy()
     except Exception:
