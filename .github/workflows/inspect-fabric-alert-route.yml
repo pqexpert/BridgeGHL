@@ -86,13 +86,18 @@ jobs:
               req=urllib.request.Request(base+path, headers={'Authorization':'Bearer '+os.environ['SOURCE_TOKEN'],'Accept':'application/vnd.github+json'})
               with urllib.request.urlopen(req, timeout=20) as response: return json.load(response)
           result={}
+          import re
+          def capabilities(data):
+              names=[s['name'] for s in data.get('secrets',[])]
+              return {category:any(re.search(pattern,n,re.I) for n in names) for category,pattern in {'jira':'JIRA|ATLASSIAN','google_oauth':'GOOGLE|GCAL|OAUTH|REFRESH','shopify':'SHOPIFY','notion':'NOTION'}.items()}
+          print(json.dumps({'stage':'FABRIC_REPOSITORY_BINDING_CAPABILITIES','repository':'BridgeGHL','candidate_presence':capabilities(get('/actions/secrets?per_page=100')),'values_returned':False,'names_returned':False}))
           for env in get('/environments?per_page=100').get('environments',[]):
               name=env['name']
               try:
                   data=get('/environments/'+urllib.parse.quote(name,safe='')+'/secrets?per_page=100')
-                  result[name]={'names':[s['name'] for s in data.get('secrets',[])], 'total_count':data.get('total_count')}
+                  result[name]={'candidate_presence':capabilities(data), 'complete_page':data.get('total_count',0)<=100}
               except Exception as exc: result[name]={'error_type':type(exc).__name__}
-          print(json.dumps({'stage':'FABRIC_MIGRATION_SECRET_NAMES','environments':result}))
+          print(json.dumps({'stage':'FABRIC_MIGRATION_BINDING_CAPABILITIES','environments':result}))
           code = """
           import json, pathlib, subprocess
           out={'services':{},'configs':{}}
