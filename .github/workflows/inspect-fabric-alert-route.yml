@@ -1,0 +1,78 @@
+name: Inspect existing Fabric alert route
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/inspect-fabric-alert-route.yml", "scripts/inspect_fabric_alert_route.py"]
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare existing SSH transport
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Retain the existing deployment's host discovery, not an independent pin.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+
+      - name: Read existing server alert bindings without values
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/fabric-preflight -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/fabric-known-hosts "${REMOTE_USER}@${REMOTE_HOST}" 'sudo -n python3 -' < scripts/inspect_fabric_alert_route.py
+      - name: Inspect existing protected runner binding presence
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
+          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+          MAILGUN_FROM: ${{ secrets.MAILGUN_FROM }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          FABRIC_ALERT_TO: ${{ secrets.FABRIC_ALERT_TO }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          from inspect_fabric_alert_route import GROUPS
+          print(json.dumps({'stage': 'FABRIC_ALERT_RUNNER_PREFLIGHT', 'groups': {name: {'complete': all(os.environ.get(k) for k in keys), 'present_fields': [k for k in keys if os.environ.get(k)]} for name, keys in GROUPS.items()}, 'recipient_configured': bool(os.environ.get('FABRIC_ALERT_TO')), 'external_messages': 0}))
+          PYCODE
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
