@@ -111,7 +111,15 @@ def main():
     readback_status, _ = bridge.highlevel_request(
         "GET", bridge.contact_task_endpoint(contact_id, task_id), timeout=10
     )
-    require(readback_status == 404, "deleted task remains readable")
+    absence_verified = readback_status == 404
+    if readback_status == 400:
+        list_status, list_data = bridge.highlevel_request(
+            "GET", bridge.contact_tasks_endpoint(contact_id), timeout=10
+        )
+        absence_verified = list_status == 200 and bridge.task_absent_from_complete_list(
+            list_data, contact_id, task_id, ACTION_KEY
+        )
+    require(absence_verified, "deleted task absence not verified")
 
     receipt = {
         "contract": "rsc-command-center-plugin/v1",
@@ -127,6 +135,7 @@ def main():
         "delete_effect": deleted["effect"],
         "delete_audit_id": deleted["audit_id"],
         "native_delete_readback_status": readback_status,
+        "native_absence_verified": absence_verified,
         "messages_sent": 0,
         "verified": True,
     }
