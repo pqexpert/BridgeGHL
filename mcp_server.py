@@ -17,9 +17,27 @@ from mcp.types import ToolAnnotations
 
 SERVER = MCPServer("BridgeGHL governed CRM")
 BRIDGE = "http://127.0.0.1:8000"
+MCP_CONTRACT_VERSION = "rsc-command-center-plugin/v1"
+TASK_TOOL_NAMES = {
+    "dry_run_task_create",
+    "execute_task_create",
+    "dry_run_task_delete",
+    "execute_task_delete",
+}
+SAFE_TASK_ERRORS = {
+    "action_not_allowed",
+    "bridge_not_ready_for_live_execute",
+    "contact_location_validation_failed",
+    "pre_write_task_read_failed",
+    "duplicate_action_key_conflict",
+    "exact_replay_missing_task_id",
+    "existing_action_key_state_conflict",
+    "task_identity_validation_failed",
+    "provider_mutation_outcome_unknown",
+}
 
 
-def _call(path: str, payload: dict | None = None) -> dict:
+def _call(path: str, payload: dict | None = None, timeout: float = 25) -> dict:
     key = os.environ.get("BRIDGE_API_KEY", "")
     if not key:
         return {"ok": False, "error": "bridge_caller_credential_missing"}
@@ -30,21 +48,30 @@ def _call(path: str, payload: dict | None = None) -> dict:
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urlopen(request, timeout=25) as response:
+        with urlopen(request, timeout=timeout) as response:
             return json.load(response)
     except HTTPError as error:
         # Only stable bridge-owned evidence errors are safe to surface.
         result = {"ok": False, "bridge_http_status": error.code}
-        if path == "/read/journey-evidence":
-            try:
-                code = json.load(error).get("detail", {}).get("error")
+        try:
+            detail = json.load(error).get("detail", {})
+            if path == "/read/journey-evidence":
+                code = detail.get("error") if isinstance(detail, dict) else None
                 if code in {"provider_binding_missing", "provider_unavailable", "provider_scope_or_auth_rejected",
                             "provider_read_failed", "provider_resource_type_mismatch", "contact_identity_mismatch",
                             "location_mismatch", "provider_pagination_mismatch", "conversation_identity_mismatch",
                             "resource_contact_mismatch", "resource_location_mismatch", "resource_conversation_mismatch"}:
                     result["error"] = code
-            except (ValueError, AttributeError, TypeError):
-                pass
+            elif path.startswith(("/dry-run/task/", "/execute/task/")) and isinstance(detail, dict):
+                code = detail.get("error")
+                if code in SAFE_TASK_ERRORS:
+                    result["error"] = code
+                    for name in ("audit_id", "task_id", "status", "match_count", "bridge_state"):
+                        value = detail.get(name)
+                        if isinstance(value, (str, int, bool)):
+                            result[name] = value
+        except (ValueError, AttributeError, TypeError):
+            pass
         return result
     except (URLError, TimeoutError):
         return {"ok": False, "error": "bridge_unavailable"}
@@ -53,7 +80,16 @@ def _call(path: str, payload: dict | None = None) -> dict:
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
 def bridge_health() -> dict:
     """Read the live BridgeGHL health and HighLevel readback state."""
-    return _call("/health")
+    result = _call("/health")
+    if isinstance(result, dict):
+        result["plugin_contract"] = {
+            "version": MCP_CONTRACT_VERSION,
+            "actor": "RSC Command Center",
+            "interface_model": "GPTs are bounded plugins/interfaces, not Actors or authority sources",
+            "task_tools_advertised": sorted(TASK_TOOL_NAMES),
+            "completion_signal": "native readback plus audit receipt",
+        }
+    return result
 
 
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
@@ -139,7 +175,7 @@ def execute_task_create(
         "due_date": due_date,
         "assigned_to": assigned_to,
         "reason": reason,
-    })
+    }, timeout=150)
 
 
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
@@ -161,7 +197,7 @@ def execute_task_delete(contact_id: str, task_id: str, action_key: str, reason: 
         "task_id": task_id,
         "action_key": action_key,
         "reason": reason,
-    })
+    }, timeout=150)
 
 
 @SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))

@@ -9,7 +9,8 @@ fields = ['BRIDGE_API_KEY', 'HIGHLEVEL_PIT', 'HIGHLEVEL_LOCATION_ID', 'GOOGLE_DR
           'HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID']
 result = {'configured': {k: bool(os.getenv(k)) for k in fields},
           'ingest_enabled': os.getenv('HIGHLEVEL_INGEST_ENABLED', '').lower() == 'true',
-          'live_write_enabled': os.getenv('LIVE_WRITE_ENABLED', '').lower() in ('true', '1', 'yes', 'on')}
+          'live_write_enabled': os.getenv('LIVE_WRITE_ENABLED', '').lower() in ('true', '1', 'yes', 'on'),
+          'task_writes_enabled': os.getenv('HIGHLEVEL_TASK_WRITES_ENABLED', '').lower() in ('true', '1', 'yes', 'on')}
 if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
     from urllib.parse import urlencode
     result['provider_checks'] = []
@@ -17,7 +18,7 @@ if os.getenv('HIGHLEVEL_PIT') and os.getenv('HIGHLEVEL_LOCATION_ID'):
     result['location_has_outer_whitespace'] = os.environ['HIGHLEVEL_LOCATION_ID'] != os.environ['HIGHLEVEL_LOCATION_ID'].strip()
     for version in ('v3', '2021-07-28'):
         request = Request('https://services.leadconnectorhq.com/opportunities/pipelines?' + urlencode({'locationId': os.environ['HIGHLEVEL_LOCATION_ID']}),
-            headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': version, 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'BridgeGHL/0.4.0'})
+            headers={'Authorization': 'Bearer ' + os.environ['HIGHLEVEL_PIT'], 'Version': version, 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'BridgeGHL/0.6.0'})
         check = {'version': version}
         try:
             with urlopen(request, timeout=15) as response:

@@ -2,6 +2,10 @@
 
 BridgeGHL remains the sole HighLevel writer. This surface admits one narrow task effect for a real, source-bound Launch17 event and does not admit contact creation, messaging, workflow enrollment, opportunity-field misuse, Calendar writes, or paid media.
 
+Task execution has a separate default-closed gate:
+`HIGHLEVEL_TASK_WRITES_ENABLED=true`. Enabling general live writes does not
+implicitly enable this action class.
+
 ## Identity and payload
 
 The caller supplies an exact event key:
@@ -19,6 +23,11 @@ Before a write, the bridge:
 5. blocks multiple matches or a same-key state conflict.
 
 A new task is posted only when no exact match exists. The bridge then reads the exact native task ID and verifies contact, title, due date, incomplete state and requested assignee before reporting `verified=true`.
+
+Immediately before POST or DELETE, the bridge persists an audit intent. It then
+finalizes the same audit identity with bounded native readback and verification.
+A provider timeout after the intent is `UNRESOLVED`; callers receive the audit
+ID and must inspect native state before retrying.
 
 ## Routes
 

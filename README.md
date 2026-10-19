@@ -66,6 +66,11 @@ Secrets and account identifiers belong only in the approved server-side runtime/
 
 The two mutation allowlists default to empty. An empty allowlist disables that mutation subclass rather than widening authority.
 
+Exact-key internal task creation and cleanup have a second, independent gate:
+`HIGHLEVEL_TASK_WRITES_ENABLED=false` by default. `LIVE_WRITE_ENABLED=true`
+does not grant task authority. The RSC production deployment must opt in
+explicitly and verify the resulting health/readback contract.
+
 ## Audit and proof
 
 Execute actions append JSON Lines to `AUDIT_LOG_PATH` containing the action, target ID, reason, before/requested/after state, HTTP statuses, verification state, and audit ID. Secret values are never written to the audit record.
@@ -81,6 +86,9 @@ A mutation that cannot be read back is **Needs Runtime Verification**, not compl
 Use one sub-account, one protected PIT, one bridge caller credential, and one narrow allowlist. Keep `LIVE_WRITE_ENABLED=false` until secret binding, location mapping, audit-path writability, and readback are verified in the deployed runtime.
 
 See `docs/deployment-runbook.md` for the activation sequence.
+
+For the RSC Command Center plugin model and autonomous-cycle acceptance test,
+see `docs/RSC-COMMAND-CENTER-AUTONOMY.md`.
 
 ## Design principles
 

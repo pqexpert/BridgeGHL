@@ -1,8 +1,11 @@
 import importlib
+import json
 import os
 
 import pytest
+import requests
 from fastapi import HTTPException
+from starlette.requests import Request
 
 os.environ.setdefault("BRIDGE_API_KEY", "test-key")
 os.environ.setdefault("HIGHLEVEL_LOCATION_ID", "test-location")
@@ -163,7 +166,86 @@ def test_task_delete_requires_exact_identity():
     assert bridge.verify_task_identity(projected, payload)["ok"] is False
 
 
-def test_health_allowlist_admits_only_bounded_task_actions():
-    assert {"create_task", "delete_task"}.issubset(bridge.ALLOWED_ACTIONS)
-    assert "send_message" not in bridge.ALLOWED_ACTIONS
-    assert "create_contact" not in bridge.ALLOWED_ACTIONS
+def test_task_actions_require_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(bridge, "TASK_WRITES_ENABLED", False)
+    assert {"create_task", "delete_task"}.isdisjoint(bridge.allowed_actions())
+
+    monkeypatch.setattr(bridge, "TASK_WRITES_ENABLED", True)
+    assert {"create_task", "delete_task"}.issubset(bridge.allowed_actions())
+    assert "send_message" not in bridge.allowed_actions()
+    assert "create_contact" not in bridge.allowed_actions()
+
+
+def task_request():
+    return bridge.TaskCreateRequest(
+        contact_id="contact-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:17",
+        due_date="2026-10-20T12:00:00Z",
+        reason="isolated acceptance",
+    )
+
+
+def http_request():
+    return Request({"type": "http", "client": ("127.0.0.1", 1234), "headers": []})
+
+
+def test_task_mutation_timeout_is_audited_as_unresolved(monkeypatch, tmp_path):
+    calls = iter([
+        (200, {"contact": {"id": "contact-1", "locationId": "test-location"}}),
+        (200, {"tasks": []}),
+    ])
+
+    def provider(method, url, **kwargs):
+        if method == "POST":
+            raise requests.Timeout("provider timeout")
+        return next(calls)
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "AUDIT_LOG_PATH", str(audit))
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", provider)
+
+    with pytest.raises(HTTPException) as exc:
+        bridge.execute_task_create(task_request(), http_request(), x_api_key="test-key")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["error"] == "provider_mutation_outcome_unknown"
+    entries = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert [entry["phase"] for entry in entries] == ["intent", "final"]
+    assert entries[0]["audit_id"] == entries[1]["audit_id"]
+    assert entries[1]["effect"] == "UNRESOLVED"
+    assert entries[1]["verified"] is False
+
+
+def test_task_success_audit_persists_native_readback(monkeypatch, tmp_path):
+    payload = task_request()
+    calls = iter([
+        (200, {"contact": {"id": "contact-1", "locationId": "test-location"}}),
+        (200, {"tasks": []}),
+        (200, {"task": {"id": "task-1"}}),
+        (200, {"task": {
+            "id": "task-1",
+            "contactId": "contact-1",
+            "assignedTo": None,
+            "dueDate": payload.due_date,
+            "completed": False,
+            "title": bridge.task_title(payload.action_key),
+        }}),
+    ])
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "AUDIT_LOG_PATH", str(audit))
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", lambda *args, **kwargs: next(calls))
+
+    result = bridge.execute_task_create(payload, http_request(), x_api_key="test-key")
+
+    assert result.effect == "CREATED"
+    assert result.verified is True
+    entries = [json.loads(line) for line in audit.read_text().splitlines()]
+    final = entries[-1]
+    assert final["readback"]["id"] == "task-1"
+    assert final["verification"]["ok"] is True

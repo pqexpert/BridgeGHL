@@ -10,7 +10,7 @@ import uuid
 import requests
 import time
 
-app = FastAPI(title="BridgeGHL", version="0.5.0")
+app = FastAPI(title="BridgeGHL", version="0.6.0")
 
 API_KEY = os.getenv("BRIDGE_API_KEY", "")
 HIGHLEVEL_PIT = os.getenv("HIGHLEVEL_PIT", "")
@@ -18,6 +18,7 @@ HIGHLEVEL_LOCATION_ID = os.getenv("HIGHLEVEL_LOCATION_ID", "")
 AUDIT_LOG_PATH = os.getenv("AUDIT_LOG_PATH", "/var/log/bridgeghl/audit.log")
 HIGHLEVEL_BASE_URL = os.getenv("HIGHLEVEL_BASE_URL", "https://services.leadconnectorhq.com")
 LIVE_WRITE_ENABLED = os.getenv("LIVE_WRITE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+TASK_WRITES_ENABLED = os.getenv("HIGHLEVEL_TASK_WRITES_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 HEALTHCHECK_TIMEOUT_SECONDS = float(os.getenv("HEALTHCHECK_TIMEOUT_SECONDS", "5"))
 
 
@@ -32,12 +33,16 @@ def parse_csv_env(name: str) -> set[str]:
 APPROVED_CUSTOM_FIELD_IDS = parse_csv_env("HIGHLEVEL_APPROVED_CUSTOM_FIELD_IDS")
 APPROVED_CONTACT_TAGS = parse_csv_env("HIGHLEVEL_APPROVED_CONTACT_TAGS")
 
-ALLOWED_ACTIONS = {
+BASE_ALLOWED_ACTIONS = {
     "update_opportunity",
     "normalize_contact_tags",
-    "create_task",
-    "delete_task",
 }
+TASK_ACTIONS = {"create_task", "delete_task"}
+
+
+def allowed_actions() -> set[str]:
+    """Return the active mutation envelope; task authority defaults closed."""
+    return BASE_ALLOWED_ACTIONS | (TASK_ACTIONS if TASK_WRITES_ENABLED else set())
 
 TASK_ACTION_PREFIX = "launch17-next-action:v1:"
 TASK_ACTION_KEY_RE = re.compile(
@@ -120,6 +125,7 @@ class BridgeHealthResponse(BaseModel):
     state: Literal["HEALTHY", "DEGRADED", "UNCONFIGURED", "ERROR"]
     service: str
     live_write_enabled: bool
+    task_writes_enabled: bool
     configured: dict
     allowed_actions: list[str]
     approved_custom_field_count: int
@@ -279,7 +285,7 @@ def highlevel_headers(redacted: bool = False) -> dict:
         "Version": "v3",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "BridgeGHL/0.5.0",
+        "User-Agent": "BridgeGHL/0.6.0",
     }
 
 
@@ -576,8 +582,9 @@ def bridge_health_snapshot() -> BridgeHealthResponse:
         state=state,
         service="BridgeGHL",
         live_write_enabled=LIVE_WRITE_ENABLED,
+        task_writes_enabled=TASK_WRITES_ENABLED,
         configured=configured,
-        allowed_actions=sorted(ALLOWED_ACTIONS),
+        allowed_actions=sorted(allowed_actions()),
         approved_custom_field_count=len(APPROVED_CUSTOM_FIELD_IDS),
         approved_contact_tag_count=len(APPROVED_CONTACT_TAGS),
         last_checked_at=datetime.now(timezone.utc).isoformat(),
@@ -586,7 +593,7 @@ def bridge_health_snapshot() -> BridgeHealthResponse:
 
 
 def execute_guard(action: str):
-    if action not in ALLOWED_ACTIONS:
+    if action not in allowed_actions():
         raise HTTPException(status_code=400, detail={"error": "action_not_allowed", "action": action})
     health = bridge_health_snapshot()
     if health.state != "HEALTHY":
@@ -952,14 +959,18 @@ def execute_task_create(
     if not validation["valid"]:
         raise HTTPException(status_code=422, detail=validation)
 
-    contact_status, contact_data = highlevel_request("GET", contact_endpoint(normalized.contact_id))
+    contact_status, contact_data = highlevel_request(
+        "GET", contact_endpoint(normalized.contact_id), timeout=10
+    )
     if not 200 <= contact_status < 300 or not contact_belongs_to_location(contact_data, normalized.contact_id):
         raise HTTPException(
             status_code=409,
             detail={"error": "contact_location_validation_failed", "status": contact_status},
         )
 
-    list_status, list_data = highlevel_request("GET", contact_tasks_endpoint(normalized.contact_id))
+    list_status, list_data = highlevel_request(
+        "GET", contact_tasks_endpoint(normalized.contact_id), timeout=10
+    )
     if not 200 <= list_status < 300:
         raise HTTPException(
             status_code=409,
@@ -986,7 +997,7 @@ def execute_task_create(
         if not task_id:
             raise HTTPException(status_code=409, detail={"error": "exact_replay_missing_task_id"})
         readback_status, readback_data = highlevel_request(
-            "GET", contact_task_endpoint(normalized.contact_id, task_id)
+            "GET", contact_task_endpoint(normalized.contact_id, task_id), timeout=15
         )
         projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
         verification = verify_task(projected, normalized) if projected else {"ok": False, "checks": []}
@@ -995,6 +1006,7 @@ def execute_task_create(
                 status_code=409,
                 detail={"error": "existing_action_key_state_conflict", "task_id": task_id},
             )
+        statuses.append({"operation": "read_task", "status": readback_status})
         append_audit_log({
             "audit_id": audit_id,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -1006,7 +1018,9 @@ def execute_task_create(
             "reason": normalized.reason,
             "effect": "NO_CHANGE_EXACT_REPLAY",
             "task_id": task_id,
-            "statuses": statuses + [{"operation": "read_task", "status": readback_status}],
+            "statuses": statuses,
+            "readback": projected,
+            "verification": verification,
             "verified": True,
             "result": "verified_exact_replay",
         })
@@ -1023,25 +1037,63 @@ def execute_task_create(
             verification=verification,
         )
 
-    write_status, write_data = highlevel_request(
-        "POST",
-        contact_tasks_endpoint(normalized.contact_id),
-        body=build_task_create_body(normalized),
-        retry_reads=False,
-    )
-    statuses.append({"operation": "create_task", "status": write_status})
-    created = unwrap_record(write_data, "task") if 200 <= write_status < 300 else {}
-    task_id = str(created.get("id") or "")
+    requested = build_task_create_body(normalized)
+    append_audit_log({
+        "audit_id": audit_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "create_task",
+        "mode": "execute",
+        "phase": "intent",
+        "caller_ip": caller_ip(request),
+        "target_id": normalized.contact_id,
+        "action_key": normalized.action_key,
+        "reason": normalized.reason,
+        "requested": requested,
+        "statuses": statuses,
+        "result": "intent_persisted",
+    })
+    task_id = ""
     readback_status: Optional[int] = None
     projected: dict = {}
-    if task_id:
-        readback_status, readback_data = highlevel_request(
-            "GET", contact_task_endpoint(normalized.contact_id, task_id)
+    try:
+        write_status, write_data = highlevel_request(
+            "POST",
+            contact_tasks_endpoint(normalized.contact_id),
+            body=requested,
+            timeout=15,
+            retry_reads=False,
         )
-        projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
-        statuses.append({"operation": "read_task", "status": readback_status})
+        statuses.append({"operation": "create_task", "status": write_status})
+        created = unwrap_record(write_data, "task") if 200 <= write_status < 300 else {}
+        task_id = str(created.get("id") or "")
+        if task_id:
+            readback_status, readback_data = highlevel_request(
+                "GET", contact_task_endpoint(normalized.contact_id, task_id), timeout=15
+            )
+            projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
+            statuses.append({"operation": "read_task", "status": readback_status})
+    except requests.RequestException as exc:
+        append_audit_log({
+            "audit_id": audit_id,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "create_task",
+            "mode": "execute",
+            "phase": "final",
+            "target_id": normalized.contact_id,
+            "action_key": normalized.action_key,
+            "effect": "UNRESOLVED",
+            "statuses": statuses,
+            "verified": False,
+            "result": "provider_mutation_outcome_unknown",
+            "error_type": type(exc).__name__,
+        })
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "provider_mutation_outcome_unknown", "audit_id": audit_id},
+        ) from exc
     verification = verify_task(projected, normalized) if projected else {"ok": False, "checks": []}
     verified = bool(200 <= write_status < 300 and verification["ok"])
+    effect = "CREATED" if verified else "UNRESOLVED"
     append_audit_log({
         "audit_id": audit_id,
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -1051,11 +1103,14 @@ def execute_task_create(
         "target_id": normalized.contact_id,
         "action_key": normalized.action_key,
         "reason": normalized.reason,
-        "requested": build_task_create_body(normalized),
-        "effect": "CREATED" if 200 <= write_status < 300 else "UNRESOLVED",
+        "phase": "final",
+        "requested": requested,
+        "effect": effect,
         "task_id": task_id or None,
         "statuses": statuses,
         "readback_status": readback_status,
+        "readback": projected,
+        "verification": verification,
         "verified": verified,
         "result": "verified" if verified else "needs_runtime_verification",
     })
@@ -1063,7 +1118,7 @@ def execute_task_create(
         accepted=200 <= write_status < 300,
         mode="execute",
         action="create_task",
-        effect="CREATED" if 200 <= write_status < 300 else "UNRESOLVED",
+        effect=effect,
         audit_id=audit_id,
         task_id=task_id or None,
         highlevel_statuses=statuses,
@@ -1124,14 +1179,16 @@ def execute_task_delete(
     if not validation["valid"]:
         raise HTTPException(status_code=422, detail=validation)
 
-    contact_status, contact_data = highlevel_request("GET", contact_endpoint(normalized.contact_id))
+    contact_status, contact_data = highlevel_request(
+        "GET", contact_endpoint(normalized.contact_id), timeout=10
+    )
     if not 200 <= contact_status < 300 or not contact_belongs_to_location(contact_data, normalized.contact_id):
         raise HTTPException(
             status_code=409,
             detail={"error": "contact_location_validation_failed", "status": contact_status},
         )
     before_status, before_data = highlevel_request(
-        "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id)
+        "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id), timeout=15
     )
     before = project_task(before_data) if 200 <= before_status < 300 else {}
     identity = verify_task_identity(before, normalized) if before else {"ok": False, "checks": []}
@@ -1141,22 +1198,63 @@ def execute_task_delete(
             detail={"error": "task_identity_validation_failed", "status": before_status},
         )
 
-    delete_status, _ = highlevel_request(
-        "DELETE",
-        contact_task_endpoint(normalized.contact_id, normalized.task_id),
-        retry_reads=False,
-    )
-    readback_status, _ = highlevel_request(
-        "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id)
-    )
-    verified = 200 <= delete_status < 300 and readback_status == 404
     audit_id = str(uuid.uuid4())
     statuses = [
         {"operation": "read_contact", "status": contact_status},
         {"operation": "read_task", "status": before_status},
-        {"operation": "delete_task", "status": delete_status},
-        {"operation": "read_deleted_task", "status": readback_status},
     ]
+    append_audit_log({
+        "audit_id": audit_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "delete_task",
+        "mode": "execute",
+        "phase": "intent",
+        "caller_ip": caller_ip(request),
+        "target_id": normalized.contact_id,
+        "action_key": normalized.action_key,
+        "reason": normalized.reason,
+        "task_id": normalized.task_id,
+        "readback_before": before,
+        "identity_verification": identity,
+        "statuses": statuses,
+        "result": "intent_persisted",
+    })
+    try:
+        delete_status, _ = highlevel_request(
+            "DELETE",
+            contact_task_endpoint(normalized.contact_id, normalized.task_id),
+            timeout=15,
+            retry_reads=False,
+        )
+        statuses.append({"operation": "delete_task", "status": delete_status})
+        readback_status, _ = highlevel_request(
+            "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id), timeout=15
+        )
+        statuses.append({"operation": "read_deleted_task", "status": readback_status})
+    except requests.RequestException as exc:
+        append_audit_log({
+            "audit_id": audit_id,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "delete_task",
+            "mode": "execute",
+            "phase": "final",
+            "target_id": normalized.contact_id,
+            "action_key": normalized.action_key,
+            "task_id": normalized.task_id,
+            "readback_before": before,
+            "identity_verification": identity,
+            "effect": "UNRESOLVED",
+            "statuses": statuses,
+            "verified": False,
+            "result": "provider_mutation_outcome_unknown",
+            "error_type": type(exc).__name__,
+        })
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "provider_mutation_outcome_unknown", "audit_id": audit_id,
+                    "task_id": normalized.task_id},
+        ) from exc
+    verified = 200 <= delete_status < 300 and readback_status == 404
     verification = {
         "ok": verified,
         "checks": [
@@ -1173,9 +1271,13 @@ def execute_task_delete(
         "target_id": normalized.contact_id,
         "action_key": normalized.action_key,
         "reason": normalized.reason,
-        "effect": "DELETED" if 200 <= delete_status < 300 else "UNRESOLVED",
+        "phase": "final",
+        "effect": "DELETED" if verified else "UNRESOLVED",
         "task_id": normalized.task_id,
         "statuses": statuses,
+        "readback_before": before,
+        "identity_verification": identity,
+        "verification": verification,
         "verified": verified,
         "result": "verified" if verified else "needs_runtime_verification",
     })
@@ -1183,7 +1285,7 @@ def execute_task_delete(
         accepted=200 <= delete_status < 300,
         mode="execute",
         action="delete_task",
-        effect="DELETED" if 200 <= delete_status < 300 else "UNRESOLVED",
+        effect="DELETED" if verified else "UNRESOLVED",
         audit_id=audit_id,
         task_id=normalized.task_id,
         highlevel_statuses=statuses,
