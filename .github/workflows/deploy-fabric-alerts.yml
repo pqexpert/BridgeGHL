@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       public_key: ${{ steps.prepare.outputs.public_key }}
+      secret_name: ${{ steps.discover.outputs.secret_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +48,10 @@ jobs:
           ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
           test -s ~/.ssh/fabric-known-hosts
 
+      - id: discover
+        env:
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+        run: python3 scripts/deploy_fabric_alerts.py discover
       - id: prepare
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
@@ -68,7 +73,7 @@ jobs:
           persist-credentials: false
       - id: wrap
         env:
-          AGENTMAIL_API_KEY: ${{ secrets.AGENTMAIL_API_KEY }}
+          AGENTMAIL_API_KEY: ${{ secrets[needs.prepare.outputs.secret_name] }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           ATLASSIAN_API_TOKEN: ${{ secrets.ATLASSIAN_API_TOKEN }}
           TRANSFER_PUBLIC: ${{ needs.prepare.outputs.public_key }}
@@ -114,6 +119,50 @@ jobs:
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
           TRANSFER_SEALED: ${{ needs.wrap.outputs.sealed }}
         run: python3 scripts/deploy_fabric_alerts.py install
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
+  cleanup:
+    if: always() && needs.prepare.result == 'success'
+    needs: [prepare, wrap, deploy]
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare existing SSH transport
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Retain the existing deployment's host discovery, not an independent pin.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+
+      - name: Remove one-use wrapping material
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+        run: python3 scripts/deploy_fabric_alerts.py cleanup
       - name: Remove temporary SSH material
         if: always()
         run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
