@@ -60,6 +60,15 @@ def inspect():
             result["last_audit_is_create"] = row.get("action") == "create_task"
             result["last_audit_is_delete"] = row.get("action") == "delete_task"
             result["last_audit_unresolved"] = row.get("effect") == "UNRESOLVED"
+            result["last_audit_statuses"] = row.get("statuses", [])
+            result["last_audit_checks"] = row.get("verification", {})
+            if row.get("action") == "delete_task" and row.get("task_id"):
+                status, data = bridge.highlevel_request("GET", bridge.contact_task_endpoint(cid, row["task_id"]), timeout=10)
+                result["deleted_task_direct_status"] = status
+                if isinstance(data, dict):
+                    result["deleted_task_response_keys"] = sorted(data.keys())
+                    result["deleted_task_not_found_message"] = data.get("message") in ("Task not found", "Task not found.", "task not found")
+                    result["deleted_task_error_not_found"] = data.get("error") in ("Not Found", "Not found", "not_found")
     return result
 
 
