@@ -66,7 +66,15 @@ def on_host(p):
 def main():
     mode=sys.argv[1]
     run=os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
-    if mode=='wrap':
+    if mode=='discover':
+        import urllib.request
+        request=urllib.request.Request('https://api.github.com/repos/pqexpert/BridgeGHL/environments/zijisecrets/secrets',headers={'Authorization':'Bearer '+os.environ['SOURCE_TOKEN'],'Accept':'application/vnd.github+json'})
+        with urllib.request.urlopen(request,timeout=20) as response: data=json.load(response)
+        names=[x['name'] for x in data.get('secrets',[]) if 'AGENTMAIL' in x['name'].upper()]
+        print(json.dumps({'agentmail_secret_names':names}))
+        if len(names)!=1: raise ValueError('agentmail_secret_name_ambiguous_or_missing')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('secret_name='+names[0]+'\n')
+    elif mode=='wrap':
         from fabric_alert_mailer import api,owner
         key=os.environ.get('AGENTMAIL_API_KEY','').strip()
         if not key: raise ValueError('agentmail_key_missing_in_zijisecrets')
@@ -92,5 +100,5 @@ def main():
 if __name__=='__main__':
     try: main()
     except Exception as exc:
-        print(json.dumps({'outcome':'HOLD','error_type':type(exc).__name__,'values_withheld':True}))
+        print(json.dumps({'outcome':'HOLD','error_type':type(exc).__name__,'values_withheld':True,'error_code':str(exc) if isinstance(exc,ValueError) and re.fullmatch('[a-z_]{1,100}',str(exc)) else 'operation_failed'}))
         raise SystemExit(1)
