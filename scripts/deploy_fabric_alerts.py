@@ -68,10 +68,11 @@ def main():
     run=os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']
     if mode=='discover':
         import urllib.request
-        request=urllib.request.Request('https://api.github.com/repos/pqexpert/BridgeGHL/environments/zijisecrets/secrets',headers={'Authorization':'Bearer '+os.environ['SOURCE_TOKEN'],'Accept':'application/vnd.github+json'})
+        request=urllib.request.Request('https://api.github.com/repos/pqexpert/BridgeGHL/environments/zijisecrets/secrets?per_page=100',headers={'Authorization':'Bearer '+os.environ['SOURCE_TOKEN'],'Accept':'application/vnd.github+json'})
         with urllib.request.urlopen(request,timeout=20) as response: data=json.load(response)
-        names=[x['name'] for x in data.get('secrets',[]) if 'AGENTMAIL' in x['name'].upper()]
-        print(json.dumps({'agentmail_secret_names':names}))
+        all_names=[x['name'] for x in data.get('secrets',[])]
+        names=[n for n in all_names if re.search(r'AGENT[_-]?MAIL',n,re.I)]
+        print(json.dumps({'agentmail_secret_names':names,'environment_secret_names':all_names}))
         if len(names)!=1: raise ValueError('agentmail_secret_name_ambiguous_or_missing')
         with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('secret_name='+names[0]+'\n')
     elif mode=='wrap':
