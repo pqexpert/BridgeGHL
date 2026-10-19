@@ -14,16 +14,13 @@ from urllib.request import Request, urlopen
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
+from task_contract import TASK_TOOL_ROUTES
+
 
 SERVER = MCPServer("BridgeGHL governed CRM")
 BRIDGE = "http://127.0.0.1:8000"
 MCP_CONTRACT_VERSION = "rsc-command-center-plugin/v1"
-TASK_TOOL_NAMES = {
-    "dry_run_task_create",
-    "execute_task_create",
-    "dry_run_task_delete",
-    "execute_task_delete",
-}
+TASK_TOOL_NAMES = set(TASK_TOOL_ROUTES)
 SAFE_TASK_ERRORS = {
     "action_not_allowed",
     "bridge_not_ready_for_live_execute",
@@ -142,7 +139,7 @@ def execute_contact_tags(contact_id: str, reason: str, tags_add: list[str], tags
     })
 
 
-@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
 def dry_run_task_create(
     contact_id: str,
     action_key: str,
@@ -160,7 +157,7 @@ def dry_run_task_create(
     })
 
 
-@SERVER.tool()
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
 def execute_task_create(
     contact_id: str,
     action_key: str,
@@ -178,7 +175,7 @@ def execute_task_create(
     }, timeout=150)
 
 
-@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
 def dry_run_task_delete(contact_id: str, task_id: str, action_key: str, reason: str) -> dict:
     """Validate exact cleanup of a governed Launch17 task without mutation."""
     return _call("/dry-run/task/delete", {
@@ -189,7 +186,7 @@ def dry_run_task_delete(contact_id: str, task_id: str, action_key: str, reason: 
     })
 
 
-@SERVER.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True))
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True))
 def execute_task_delete(contact_id: str, task_id: str, action_key: str, reason: str) -> dict:
     """Delete only the task matching the exact contact, task ID and Launch17 action key."""
     return _call("/execute/task/delete", {
