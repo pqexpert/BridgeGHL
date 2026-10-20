@@ -59,6 +59,17 @@ def test_validation_constraint_drift_is_reported():
     )
 
 
+def test_request_level_constraint_drift_is_reported():
+    document = _tools_document()
+    _tool(document, "dry_run_task_delete")["inputSchema"][
+        "additionalProperties"
+    ] = False
+
+    assert "dry_run_task_delete request schema differs" in verify_task_contract(
+        document, app.app.openapi()
+    )
+
+
 def test_task_annotations_expose_safe_replay_and_delete_semantics():
     tools = {tool["name"]: tool for tool in _tools_document()["tools"]}
     assert tools["dry_run_task_create"]["annotations"]["idempotentHint"] is True
