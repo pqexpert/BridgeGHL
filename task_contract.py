@@ -15,6 +15,18 @@ TASK_TOOL_ROUTES = {
     "execute_task_delete": "/execute/task/delete",
 }
 
+_IGNORED_SCHEMA_KEYS = {
+    "$defs",
+    "definitions",
+    "default",
+    "description",
+    "example",
+    "examples",
+    "title",
+}
+_ORDER_INSENSITIVE_ARRAY_KEYS = {"enum", "required", "type"}
+_SCHEMA_COMBINATORS = {"allOf", "anyOf", "oneOf"}
+
 
 def _resolve(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     while "$ref" in schema:
@@ -25,24 +37,50 @@ def _resolve(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]
     return schema
 
 
+def _normalize_schema(document: dict[str, Any], schema: Any) -> Any:
+    """Resolve refs and retain validation-relevant JSON Schema semantics."""
+    if not isinstance(schema, dict):
+        return schema
+    schema = _resolve(document, schema)
+    normalized: dict[str, Any] = {}
+    for key in sorted(schema):
+        if key in _IGNORED_SCHEMA_KEYS or key == "$ref":
+            continue
+        value = schema[key]
+        if key == "properties" and isinstance(value, dict):
+            normalized[key] = {
+                name: _normalize_schema(document, value[name])
+                for name in sorted(value)
+            }
+        elif key in _SCHEMA_COMBINATORS and isinstance(value, list):
+            options = [_normalize_schema(document, item) for item in value]
+            normalized[key] = sorted(
+                options,
+                key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        elif key in _ORDER_INSENSITIVE_ARRAY_KEYS and isinstance(value, list):
+            normalized[key] = sorted(
+                value,
+                key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        elif isinstance(value, dict):
+            normalized[key] = _normalize_schema(document, value)
+        elif isinstance(value, list):
+            normalized[key] = [
+                _normalize_schema(document, item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            normalized[key] = value
+    return normalized
+
+
 def _request_schema(document: dict[str, Any], route: str) -> dict[str, Any]:
     operation = document.get("paths", {}).get(route, {}).get("post", {})
     schema = operation.get("requestBody", {}).get("content", {}).get(
         "application/json", {}
     ).get("schema", {})
     return _resolve(document, schema) if schema else {}
-
-
-def _json_type(document: dict[str, Any], schema: dict[str, Any]) -> str | None:
-    schema = _resolve(document, schema)
-    if "anyOf" in schema:
-        choices = [
-            _resolve(document, item)
-            for item in schema["anyOf"]
-            if _resolve(document, item).get("type") != "null"
-        ]
-        return choices[0].get("type") if len(choices) == 1 else None
-    return schema.get("type")
 
 
 def verify_task_contract(
@@ -75,10 +113,12 @@ def verify_task_contract(
         if set(mcp.get("required", [])) != set(backend.get("required", [])):
             errors.append(f"{name} required fields differ")
         for field in sorted(set(mcp_properties) & set(backend_properties)):
-            if _json_type(openapi_document, backend_properties[field]) != _json_type(
-                {}, mcp_properties[field]
-            ):
-                errors.append(f"{name}.{field} type differs")
+            backend_schema = _normalize_schema(
+                openapi_document, backend_properties[field]
+            )
+            mcp_schema = _normalize_schema({}, mcp_properties[field])
+            if backend_schema != mcp_schema:
+                errors.append(f"{name}.{field} schema differs")
     return errors
 
 
