@@ -46,8 +46,43 @@ def test_execute_task_uses_operation_level_timeout(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert captured["path"] == "/execute/task/create"
+    assert captured["path"] == mcp_server.TASK_TOOL_ROUTES["execute_task_create"]
     assert captured["timeout"] == 150
+
+
+def test_task_wrappers_dispatch_through_verified_route_map(monkeypatch):
+    calls = []
+
+    def call(path, payload, timeout=25):
+        calls.append((path, timeout))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_server, "_call", call)
+    common_create = {
+        "contact_id": "contact-1",
+        "action_key": "launch17-next-action:v1:location1:form1:submission1:17",
+        "due_date": "2026-10-20T12:00:00Z",
+        "reason": "acceptance",
+    }
+    common_delete = {
+        "contact_id": "contact-1",
+        "task_id": "task-1",
+        "action_key": "launch17-cleanup:v1:location1:form1:submission1:17",
+        "reason": "cleanup",
+    }
+
+    mcp_server.dry_run_task_create(**common_create)
+    mcp_server.execute_task_create(**common_create)
+    mcp_server.dry_run_task_delete(**common_delete)
+    mcp_server.execute_task_delete(**common_delete)
+
+    assert [path for path, _ in calls] == [
+        mcp_server.TASK_TOOL_ROUTES["dry_run_task_create"],
+        mcp_server.TASK_TOOL_ROUTES["execute_task_create"],
+        mcp_server.TASK_TOOL_ROUTES["dry_run_task_delete"],
+        mcp_server.TASK_TOOL_ROUTES["execute_task_delete"],
+    ]
+    assert [timeout for _, timeout in calls] == [25, 150, 25, 150]
 
 
 def test_health_projects_plugin_contract(monkeypatch):
