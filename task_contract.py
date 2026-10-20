@@ -112,6 +112,13 @@ def verify_task_contract(
             errors.append(f"{name} undocumented fields: {', '.join(extra)}")
         if set(mcp.get("required", [])) != set(backend.get("required", [])):
             errors.append(f"{name} required fields differ")
+        backend_root = _normalize_schema(openapi_document, backend)
+        mcp_root = _normalize_schema({}, mcp)
+        for root in (backend_root, mcp_root):
+            root.pop("properties", None)
+            root.pop("required", None)
+        if backend_root != mcp_root:
+            errors.append(f"{name} request schema differs")
         for field in sorted(set(mcp_properties) & set(backend_properties)):
             backend_schema = _normalize_schema(
                 openapi_document, backend_properties[field]
