@@ -38,3 +38,28 @@ def test_failed_activation_restores_complete_prior_service():
     )
     assert '"${privilege[@]}" systemctl restart bridgeghl-mcp.service' in WORKFLOW
     assert 'echo "deployment_rolled_back=true"' in WORKFLOW
+
+
+def test_live_contract_checks_gate_activation_success():
+    verifier = (
+        '/opt/bridgeghl-mcp-py311/bin/python "$app_dir/task_contract.py"'
+    )
+    verifier_index = WORKFLOW.rindex(verifier)
+    success_index = WORKFLOW.index("active_verified=true", verifier_index)
+
+    assert 'http://127.0.0.1:8001/mcp >"$tools_file" && \\' in WORKFLOW
+    assert 'http://127.0.0.1:8000/openapi.json >"$live_openapi" && \\' in WORKFLOW
+    assert verifier_index < success_index
+    assert '"; then\n                  rm -f "$tools_file"' in WORKFLOW
+
+
+def test_rollback_success_marker_is_fail_closed():
+    marker = 'echo "deployment_rolled_back=true"'
+    marker_index = WORKFLOW.index(marker)
+    rollback_guard = WORKFLOW.index('if [[ "$rollback_ok" == true ]]; then')
+    failure_marker = WORKFLOW.index('echo "deployment_rollback_failed=true"')
+
+    assert rollback_guard < marker_index < failure_marker
+    assert 'systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false' in WORKFLOW
+    assert 'install -m 644 "$rollback_dir/mcp_server.py" "$app_dir/mcp_server.py" || rollback_ok=false' in WORKFLOW
+    assert 'install -m 644 "$rollback_dir/task_contract.py" "$app_dir/task_contract.py" || rollback_ok=false' in WORKFLOW
