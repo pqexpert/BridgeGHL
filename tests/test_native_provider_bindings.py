@@ -10,6 +10,21 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 class BindingsTest(unittest.TestCase):
+    def test_jira_uses_authenticated_account_not_issue_assignee(self):
+        cfg={'JIRA_EMAIL':'owner@example.com','JIRA_API_TOKEN':'secret'}
+        def call(url, *a, **k):
+            if '/myself' in url:
+                return {'active':True,'accountId':'credential-owner','emailAddress':'owner@example.com'}
+            if '/issue/' in url:
+                return {'key':'RBO-97','fields':{'project':{'key':'RBO'}}}
+            return {'permissions':{'BROWSE_PROJECTS':{'havePermission':True}}}
+        receipt, binding=m.jira(cfg,call)
+        self.assertEqual(receipt['issue_read'],'verified')
+        self.assertFalse(receipt['project_permissions']['EDIT_ISSUES'])
+        cfg['JIRA_EMAIL']='someone-else@example.com'
+        with self.assertRaises(m.ProbeError):
+            m.jira(cfg,call)
+
     def test_arbitrary_shop_destination_rejected_before_request(self):
         for domain in ['evil.example', 'store.myshopify.com@evil.example', 'store.myshopify.com/path']:
             with self.assertRaises(m.ProbeError):
