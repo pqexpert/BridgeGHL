@@ -112,7 +112,15 @@ def main(canary=False):
         evidence = {}
         if not canary and Path('/etc/ziji-fabric/failure-alarm.json').exists():
             from fabric_failure_alarm import collect
-            report = collect(now)
+            try:
+                report = collect(now)
+            except Exception:
+                # An unavailable Fabric source must not suppress existing host alerts.
+                report = {"alerts":["P1:evidence:receipt_comparator_unavailable"],"evidence":{},
+                    "observed_at":now.isoformat(),"comparable_coverage":False,
+                    "checks":{"jira":"UNAVAILABLE","unparsed_hosted_run_records":1,
+                        "calendar_writer":"UNAVAILABLE","calendar_state":"UNAVAILABLE",
+                        **{lane:{"unverified_effect_dates":["UNKNOWN"]} for lane in ("income","rsc","store")}}}
             atomic(ROOT/'fabric-latest.json',report)
             alerts = sorted(set(alerts + report['alerts']))
             evidence = report['evidence']
