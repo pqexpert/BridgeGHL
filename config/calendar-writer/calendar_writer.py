@@ -216,23 +216,52 @@ def lane_receipts(jira,now):
     found={}
     for row in jira.list():
         body=text(row.get("body",{}))
-        for lane in ("income","rsc","store"):
-            if "FABRIC_RUN "+lane+":" not in body:continue
-            created=row.get("updated",row.get("created"))
-            if not created:continue
-            try:at=handover.stamp(created)
-            except ValueError:continue
-            if lane in found and found[lane]["observed_at"]>=iso(at):continue
-            match=re.search(r'"(?:terminal_state|status|state)"\s*:\s*"(SUCCESS|NO_CHANGE|BLOCKED|FAIL|PENDING|STALE)"',body)
-            status=match.group(1) if match else next((s for s in ("NO_CHANGE","BLOCKED","SUCCESS","FAIL") if s in body),"PENDING")
-            if now-at>timedelta(hours=36):status="STALE"
-            found[lane]={"lane":lane,"status":status,"reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+str(row["id"]),"observed_at":iso(at)}
+        header,sep,payload=body.partition("\n")
+        match=re.fullmatch(r"FABRIC_RUN (income|rsc|store):[^\s]+",header.strip())
+        if not match or not sep:continue
+        lane=match.group(1)
+        try:
+            doc=json.loads(payload)
+            status=doc.get("outcome",doc.get("terminal_state"))
+            if status not in ("SUCCESS","NO_CHANGE","BLOCKED","FAIL"):continue
+            at=handover.stamp(doc.get("observed_at") or row.get("updated",row.get("created")))
+        except (ValueError,TypeError):continue
+        if lane in found and found[lane]["observed_at"]>=iso(at):continue
+        if now-at>timedelta(hours=36):status="STALE"
+        found[lane]={"lane":lane,"status":status,"reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+str(row["id"]),"observed_at":iso(at)}
     return [found.get(lane,{"lane":lane,"status":"PENDING","reference":"https://restoration-mt.atlassian.net/browse/RBO-97","observed_at":None}) for lane in ("income","rsc","store")]
+
+def actionable_candidates(receipts,now):
+    candidates=[]
+    for receipt in receipts:
+        base=Path("/var/lib/ziji-fabric/actors")/receipt["lane"]
+        latest=read(base/"latest.json",{})
+        candidate=latest.get("calendar_candidate")
+        if not isinstance(candidate,dict):continue
+        if candidate.get("privacy_reviewed") is not True or candidate.get("owner_action_required") is not True:continue
+        if not all(isinstance(candidate.get(k),str) and candidate[k].strip() for k in ("action","why","safe_default","reference","source_observed_at")):continue
+        if any(len(candidate[k])>1200 for k in ("action","why","safe_default","reference")):continue
+        try:
+            at=handover.stamp(candidate["source_observed_at"])
+            if now-at>timedelta(hours=36) or at>now+timedelta(minutes=5):continue
+            packet=Path(latest.get("packet_path",""))
+            if not packet.is_absolute() or not packet.resolve().is_relative_to((base/"packets").resolve()):continue
+            evidence=read(packet,{})
+            if evidence.get("calendar_candidate")!=candidate:continue
+        except (ValueError,OSError):continue
+        candidates.append({**receipt,**candidate,"observed_at":candidate["source_observed_at"]})
+    return candidates
+
+def eligible_for_lane(event,binding,now,lane):
+    if not handover.eligible(event,set(binding["writable_series"].values()),now):return False
+    names=("income1","income2","daily") if lane=="income" else ("secondary","daily")
+    return event.get("recurringEventId") in {binding["writable_series"].get(k) for k in names}
 
 def select_candidate(candidates,request_id):
     # Native receipt reconciliation has a deterministic ordering; no model is
     # needed merely to restate terminal evidence. Judgment remains with actors.
     order={"FAIL":0,"BLOCKED":1,"STALE":2,"PENDING":3,"SUCCESS":4,"NO_CHANGE":5}
+    if not candidates:return None,"NO_ADMITTED_OWNER_ACTION"
     return min(candidates,key=lambda row:(order[row["status"]],row["lane"])),"DETERMINISTIC_NO_MODEL"
 
 def consume_feedback(state,jira,now):
@@ -264,17 +293,12 @@ def note(candidate,pending,now):
     expiry=now+timedelta(hours=36)
     if candidate.get("observed_at") and candidate["status"] not in ("STALE","PENDING"):
         expiry=min(expiry,handover.stamp(candidate["observed_at"])+timedelta(hours=36))
-    action={"SUCCESS":"Review the linked verified outcome and decide whether any owner action remains.",
-            "NO_CHANGE":"Continue the existing plan; no new owner action is evidenced.",
-            "BLOCKED":"Review the exact dependency in the linked lane receipt before committing effort.",
-            "FAIL":"Use the linked failure receipt to recover the affected lane; preserve existing commitments.",
-            "PENDING":"Await a native lane receipt; do not treat missing evidence as completion.",
-            "STALE":"Refresh the linked lane evidence before relying on its status."}[status]
+    action=candidate["action"]
     acknowledgment="JOSH UPDATE RECEIVED: private feedback is captured; verification remains pending.\n" if pending else ""
     return (handover.START+"\nLANE: "+lane+"\nPURPOSE: Source-backed owner attention\nSTATUS: "+status+
         "\nPRIORITY: Protect existing commitments\n"+acknowledgment+"DO NEXT: "+action+
-        "\nWHY: Native lane receipt status as of "+str(candidate["observed_at"])+
-        "\nDEFAULT IF SILENT: Preserve practice, health, school and existing commitments; no catch-up debt."+
+        "\nWHY: "+candidate["why"]+" Source observed "+str(candidate["observed_at"])+
+        "\nDEFAULT IF SILENT: "+candidate["safe_default"]+
         "\nCONTINGENCY: If evidence conflicts, pause this action and inspect its owning source."+
         "\nVERIFIED: Receipt status only; no third-party submission or completion inferred."+
         "\nRECHECK BY: "+iso(expiry)+"\nDETAILS:\n"+candidate["reference"]+"\n"+handover.END),iso(expiry)
@@ -348,14 +372,17 @@ def run(mode="DELTA",write=False,scheduled=False):
         candidates=lane_receipts(jira,now)
         # Cache model selection across unchanged source versions, not across changed facts.
         fingerprint=hashobj(candidates)
-        selected,modelstatus=select_candidate(candidates,"distiller_"+fingerprint[:48])
+        admitted=actionable_candidates(candidates,now)
+        selected,modelstatus=select_candidate(admitted,"distiller_"+fingerprint[:48])
         report={"run_id":runid,"mode":mode,"observed_at":iso(now),"coverage":coverage,
             "feedback_added":added,"feedback_consumed":consumed,"pending_feedback":sum(r["status"]!="CONSUMED" for r in state["feedback"].values()),
             "ambiguous_event_count":len(ambiguous),"lane_receipts":candidates,"model_status":modelstatus,
             "calendar_writes":0,"calendar_results":[],"paid_fallback":False,"status":"NO_CHANGE"}
         if selected:
-            prefix,expiry=note(selected,report["pending_feedback"],now);report["note_expiry"]=expiry
-            eligible=[e for e in events.values() if handover.eligible(e,set(binding["writable_series"].values()),now) and e["id"] not in ambiguous]
+            attributable=[r for r in state["feedback"].values() if r["owning_lane"]==selected["lane"]
+                          and r["classification"]=="OWNER_REPORTED" and r.get("jira_capture",{}).get("verified")]
+            prefix,expiry=note(selected,bool(attributable),now);report["note_expiry"]=expiry
+            eligible=[e for e in events.values() if eligible_for_lane(e,binding,now,selected["lane"]) and e["id"] not in ambiguous]
             eligible.sort(key=lambda e:e["start"]["dateTime"])
             report["eligible_instances"]=len(eligible)
             # One consequential update suffices; maxima remain 6FULL/2DELTA.
