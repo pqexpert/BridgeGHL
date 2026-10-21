@@ -28,6 +28,13 @@ def remote(payload):
         directory=pathlib.Path("/var/lib/ziji-fabric/local-recovery/duck")
         directory.mkdir(parents=True,exist_ok=True);directory.chmod(0o700)
         command(["chown","ziji-local-link:ziji-local-link",str(directory)])
+        if not shutil.which("setfacl"):
+            manager="dnf" if shutil.which("dnf") else "apt-get"
+            command([manager,"install","-y","acl"])
+        for ancestor in (directory.parent.parent,directory.parent):
+            command(["setfacl","-m","u:ziji-local-link:--x",str(ancestor)])
+        command(["runuser","-u","ziji-local-link","--","test","-r",str(DEST/"local_recovery_snapshot.py")])
+        command(["runuser","-u","ziji-local-link","--","test","-w",str(directory)])
         pub=files["public_key"].strip()
         if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [A-Za-z0-9_-]+)?",pub):raise ValueError("public_key")
         home=pathlib.Path("/home/ziji-local-link/.ssh")
