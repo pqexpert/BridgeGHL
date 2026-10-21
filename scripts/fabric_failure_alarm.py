@@ -149,6 +149,7 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
     full.sort(key=lambda r:r["observed_at"])
     last_full = full[-1] if full else None
     checks["calendar_writer"] = "VERIFIED_RECEIPTS" if good else "UNAVAILABLE"
+    checks["calendar_state"] = "AVAILABLE" if isinstance(state.get("feedback"),dict) else "UNAVAILABLE"
     checks["last_good_full"] = last_full.get("observed_at") if last_full else None
     if last_full and now-stamp(last_full["observed_at"]) > dt.timedelta(hours=36):
         alarm("P1","distiller","full_readback_older_than_36h","vps:calendar-writer/runs")
@@ -198,7 +199,7 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
     checks["limits"] = ["No erased-between-polls detection","No whole-platform outage claim",
         "Unstructured legacy conditions remain unparsed; missing subset is not whole-actor failure"]
     scan_verified = bool(last_full) and bool(last_full.get("coverage")) and all(w.get("complete") is True for w in last_full["coverage"])
-    comparable = fresh and unparsed == 0 and scan_verified and all(checks[x]["terminal_dates"] for x in DUE)
+    comparable = fresh and unparsed == 0 and scan_verified and checks["calendar_state"] == "AVAILABLE" and all(checks[x]["terminal_dates"] for x in DUE)
     return {"schema":"fabric-failure-alarm/1","observed_at":now.isoformat(),
             "alerts":sorted(set(alerts)),"evidence":evidence,"checks":checks,
             "comparable_coverage":comparable,"model_calls":0,"provider_reads":0,

@@ -16,7 +16,7 @@ def fixture():
        "status":"NO_CHANGE","checkpoint":{"verified":True},"coverage":[{"kind":"baseline","complete":True}]}
  return snapshot,ledger,full
 def evaluate(snapshot,ledger,full,state=None):
- return a.evaluate(NOW,snapshot,ledger,full,[full] if full else [],state or {})
+ return a.evaluate(NOW,snapshot,ledger,full,[full] if full else [],state or {"feedback":{}})
 class AlarmTests(unittest.TestCase):
  def test_healthy_empty_feedback_and_replay_silent(self):
   s,l,f=fixture();r=evaluate(s,l,f)
