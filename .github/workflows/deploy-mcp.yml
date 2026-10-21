@@ -118,6 +118,8 @@ jobs:
           had_mcp=false
           had_contract=false
           had_unit=false
+          was_enabled=false
+          was_active=false
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
             had_mcp=true
             "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$rollback_dir/mcp_server.py"
@@ -128,14 +130,20 @@ jobs:
           fi
           if "${privilege[@]}" test -f "$unit"; then
             had_unit=true
+            if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
+              was_enabled=true
+            fi
+            if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
+              was_active=true
+            fi
             "${privilege[@]}" cp -a "$unit" "$rollback_dir/bridgeghl-mcp.service"
           fi
 
           if (
             set -euo pipefail
-            "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py"
-            "${privilege[@]}" install -m 644 "$contract_file" "$app_dir/task_contract.py"
-            "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT'
+            "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py" || exit 1
+            "${privilege[@]}" install -m 644 "$contract_file" "$app_dir/task_contract.py" || exit 1
+            "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT' || exit 1
           [Unit]
           Description=BridgeGHL governed MCP adapter (loopback only)
           After=network-online.target bridgeghl.service
@@ -157,10 +165,10 @@ jobs:
           [Install]
           WantedBy=multi-user.target
           UNIT
-            "${privilege[@]}" systemctl daemon-reload
-            "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service
-            "${privilege[@]}" systemctl restart bridgeghl-mcp.service
-            "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service
+            "${privilege[@]}" systemctl daemon-reload || exit 1
+            "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service || exit 1
+            "${privilege[@]}" systemctl restart bridgeghl-mcp.service || exit 1
+            "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || exit 1
 
             active_verified=false
             for attempt in {1..12}; do
@@ -236,9 +244,24 @@ jobs:
             if [[ "$had_unit" == true ]]; then
               "${privilege[@]}" install -m 644 "$rollback_dir/bridgeghl-mcp.service" "$unit" || rollback_ok=false
               "${privilege[@]}" systemctl daemon-reload || rollback_ok=false
-              "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service || rollback_ok=false
-              "${privilege[@]}" systemctl restart bridgeghl-mcp.service || rollback_ok=false
-              "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false
+              if [[ "$was_enabled" == true ]]; then
+                "${privilege[@]}" systemctl enable bridgeghl-mcp.service || rollback_ok=false
+                "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service || rollback_ok=false
+              else
+                "${privilege[@]}" systemctl disable bridgeghl-mcp.service || rollback_ok=false
+                if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
+                  rollback_ok=false
+                fi
+              fi
+              if [[ "$was_active" == true ]]; then
+                "${privilege[@]}" systemctl restart bridgeghl-mcp.service || rollback_ok=false
+                "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false
+              else
+                "${privilege[@]}" systemctl stop bridgeghl-mcp.service || rollback_ok=false
+                if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
+                  rollback_ok=false
+                fi
+              fi
             else
               "${privilege[@]}" systemctl disable --now bridgeghl-mcp.service || true
               "${privilege[@]}" rm -f "$unit" || rollback_ok=false
