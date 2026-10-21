@@ -24,6 +24,8 @@ class BindingsTest(unittest.TestCase):
         cfg['JIRA_EMAIL']='someone-else@example.com'
         with self.assertRaises(m.ProbeError):
             m.jira(cfg,call)
+        with self.assertRaises(m.ProbeError):
+            m.jira(cfg, lambda *a, **k: {'active':True, 'accountId':'unknown-owner'})
 
     def test_arbitrary_shop_destination_rejected_before_request(self):
         for domain in ['evil.example', 'store.myshopify.com@evil.example', 'store.myshopify.com/path']:
