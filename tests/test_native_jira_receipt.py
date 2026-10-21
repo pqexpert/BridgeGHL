@@ -1,0 +1,30 @@
+import pathlib,sys,tempfile,unittest
+from unittest.mock import patch
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/"scripts"))
+import native_jira_receipt as r
+class Receipts(unittest.TestCase):
+    def test_timeout_reconciles_without_second_post(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,"headers",return_value={}):
+            r.STATE=pathlib.Path(d);rows=[];posts=[]
+            def call(url,headers=None,body=None):
+                if body:
+                    posts.append(body);rows.append({"id":"12","body":body["body"]})
+                    raise TimeoutError()
+                if "/comment?" in url:return {"startAt":0,"total":len(rows),"comments":rows}
+                return rows[0]
+            data={"lane":"income","outcome":"SUCCESS","native_readback":True}
+            self.assertEqual(r.publish("RBO-97","income:packet:source:interviewprep",data,call)["status"],"UNKNOWN")
+            self.assertEqual(r.publish("RBO-97","income:packet:source:interviewprep",data,call)["status"],"EXISTING")
+            self.assertEqual(len(posts),1)
+    def test_unknown_absence_never_reposts(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,"headers",return_value={}):
+            r.STATE=pathlib.Path(d);posts=[]
+            def call(url,headers=None,body=None):
+                if body:posts.append(body);raise TimeoutError()
+                return {"startAt":0,"total":0,"comments":[]}
+            data={"lane":"rsc","outcome":"BLOCKED"}
+            for _ in range(2):self.assertEqual(r.publish("RBO-34","rsc:scope:reconcile",data,call)["status"],"UNKNOWN")
+            self.assertEqual(len(posts),1)
+            with self.assertRaisesRegex(r.ProbeError,"receipt_id_conflict"):
+                r.publish("RBO-34","rsc:scope:reconcile",dict(data,outcome="SUCCESS"),call)
+if __name__=="__main__":unittest.main()
