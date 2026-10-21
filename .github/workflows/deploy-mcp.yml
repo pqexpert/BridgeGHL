@@ -118,7 +118,7 @@ jobs:
           had_mcp=false
           had_contract=false
           had_unit=false
-          was_enabled=false
+          enablement_state=disabled
           was_active=false
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
             had_mcp=true
@@ -130,9 +130,13 @@ jobs:
           fi
           if "${privilege[@]}" test -f "$unit"; then
             had_unit=true
-            if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
-              was_enabled=true
-            fi
+            enablement_state=$("${privilege[@]}" systemctl is-enabled bridgeghl-mcp.service 2>/dev/null || true)
+            # Refuse unfamiliar state before activation instead of guessing how
+            # to restore it; runtime-only enablement must stay runtime-only.
+            case "$enablement_state" in
+              enabled|enabled-runtime|disabled) ;;
+              *) echo "unsupported_prior_enablement_state=true" >&2; exit 1 ;;
+            esac
             if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
               was_active=true
             fi
@@ -244,15 +248,16 @@ jobs:
             if [[ "$had_unit" == true ]]; then
               "${privilege[@]}" install -m 644 "$rollback_dir/bridgeghl-mcp.service" "$unit" || rollback_ok=false
               "${privilege[@]}" systemctl daemon-reload || rollback_ok=false
-              if [[ "$was_enabled" == true ]]; then
+              if [[ "$enablement_state" == enabled-runtime ]]; then
+                "${privilege[@]}" systemctl disable bridgeghl-mcp.service || rollback_ok=false
+                "${privilege[@]}" systemctl enable --runtime bridgeghl-mcp.service || rollback_ok=false
+              elif [[ "$enablement_state" == enabled ]]; then
                 "${privilege[@]}" systemctl enable bridgeghl-mcp.service || rollback_ok=false
-                "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service || rollback_ok=false
               else
                 "${privilege[@]}" systemctl disable bridgeghl-mcp.service || rollback_ok=false
-                if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
-                  rollback_ok=false
-                fi
               fi
+              restored_enablement=$("${privilege[@]}" systemctl is-enabled bridgeghl-mcp.service 2>/dev/null || true)
+              [[ "$restored_enablement" == "$enablement_state" ]] || rollback_ok=false
               if [[ "$was_active" == true ]]; then
                 "${privilege[@]}" systemctl restart bridgeghl-mcp.service || rollback_ok=false
                 "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false

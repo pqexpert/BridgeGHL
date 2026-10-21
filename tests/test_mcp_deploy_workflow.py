@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import textwrap
 
 
 WORKFLOW = Path(".github/workflows/deploy-mcp.yml").read_text()
@@ -62,11 +64,11 @@ def test_activation_commands_are_explicitly_fail_closed():
 
 
 def test_rollback_restores_prior_enabled_and_active_states():
-    assert "was_enabled=false" in WORKFLOW
+    assert "enablement_state=disabled" in WORKFLOW
     assert "was_active=false" in WORKFLOW
-    assert "systemctl is-enabled --quiet bridgeghl-mcp.service" in WORKFLOW
+    assert "systemctl is-enabled bridgeghl-mcp.service" in WORKFLOW
     assert "systemctl is-active --quiet bridgeghl-mcp.service" in WORKFLOW
-    assert 'if [[ "$was_enabled" == true ]]; then' in WORKFLOW
+    assert 'elif [[ "$enablement_state" == enabled ]]; then' in WORKFLOW
     assert '"${privilege[@]}" systemctl enable bridgeghl-mcp.service' in WORKFLOW
     assert '"${privilege[@]}" systemctl disable bridgeghl-mcp.service' in WORKFLOW
     assert 'if [[ "$was_active" == true ]]; then' in WORKFLOW
@@ -97,3 +99,37 @@ def test_rollback_success_marker_is_fail_closed():
     assert 'systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false' in WORKFLOW
     assert 'install -m 644 "$rollback_dir/mcp_server.py" "$app_dir/mcp_server.py" || rollback_ok=false' in WORKFLOW
     assert 'install -m 644 "$rollback_dir/task_contract.py" "$app_dir/task_contract.py" || rollback_ok=false' in WORKFLOW
+
+
+def test_runtime_enablement_rollback_does_not_persist_across_boot():
+    start = WORKFLOW.index('if [[ "$enablement_state" == enabled-runtime ]]; then')
+    end = WORKFLOW.index('if [[ "$was_active" == true ]]; then', start)
+    restore = textwrap.dedent(WORKFLOW[start:end])
+    # Model systemd's distinct persistent and runtime enablement stores. The
+    # candidate has added persistent enablement; rollback must remove it.
+    harness = '''
+set -euo pipefail
+privilege=()
+enablement_state=enabled-runtime
+rollback_ok=true
+persistent=true
+runtime=true
+systemctl() {
+  case "$1" in
+    disable) persistent=false; runtime=false ;;
+    enable)
+      if [[ "$2" == --runtime ]]; then runtime=true; else persistent=true; fi ;;
+    is-enabled)
+      if [[ "$persistent" == true ]]; then echo enabled
+      elif [[ "$runtime" == true ]]; then echo enabled-runtime
+      else echo disabled; return 1; fi ;;
+    *) return 2 ;;
+  esac
+}
+'''
+    result = subprocess.run(
+        ["bash", "-c", harness + restore +
+         '\n[[ "$rollback_ok" == true && "$persistent" == false && "$runtime" == true ]]'],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
