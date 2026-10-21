@@ -61,14 +61,28 @@ def native_records(snapshot, ledger, now):
                     records.append(row)
                     found = True
                     break
-            if "FABRIC_RUN" in body and not found:
+            if not found:
+                legacy = re.search(r"(?m)^\s*FABRIC_RUN\s+(income|rsc|store):(\d{4}-\d{2}-\d{2}):daily\s*[—–-]\s*(SUCCESS|NO_CHANGE|BLOCKED|FAIL)\b", body)
+                observed = re.search(r"observed_utc:\s*([0-9T:.+Z-]+)", body)
+                if legacy and observed:
+                    lane, date, outcome = legacy.groups()
+                    try:
+                        seen = stamp(observed.group(1))
+                        if seen.astimezone(ET).date().isoformat() == date:
+                            records.append({"lane":lane,"local_date":date,"outcome":outcome,
+                                "observed_at":seen.isoformat(),"replay_id":lane+":"+date+":daily",
+                                "reference":entry.get("reference"),"legacy_effect_proof":"NARRATIVE_UNVERIFIED"})
+                            found = True
+                    except ValueError:
+                        pass
+            if re.search(r"(?m)^\s*FABRIC_RUN\b",body) and not found:
                 try:
                     if now-stamp(entry["created"]) < dt.timedelta(hours=48): unparsed += 1
                 except (ValueError,KeyError,TypeError): unparsed += 1
     records.sort(key=lambda r: str(r.get("observed_at",r.get("local_date",""))))
     return records, unparsed
 
-def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
+def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None, writer_active=False):
     now = now.astimezone(UTC)
     local = now.astimezone(ET)
     records, unparsed = native_records(snapshot or {}, ledger, now)
@@ -98,7 +112,7 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
             due = dt.datetime.combine(date, dt.time(hour,minute), ET)
             if local >= due + dt.timedelta(minutes=90):
                 dates.append(date.isoformat())
-        complete, bad = [], []
+        complete, bad, unknown_readback = [], [], []
         for date in dates:
             candidates = [r for r in records if r.get("lane") == lane
                 and r.get("whole_actor_replaced") is not False
@@ -115,8 +129,10 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
                 complete.append(date)
                 # BLOCKED is truthful terminal state, not automatic actor failure.
                 if outcome != "BLOCKED" and row.get("native_readback") is not True:
-                    alarm("P1",lane,"terminal_readback_unverified",row.get("reference"))
-        checks[lane] = {"terminal_dates": complete, "missing_or_failed_dates": bad,
+                    unknown_readback.append(date)
+                    if row.get("native_readback") is False:
+                        alarm("P1",lane,"terminal_readback_unverified",row.get("reference"))
+        checks[lane] = {"terminal_dates": complete, "missing_or_failed_dates": bad, "unverified_effect_dates":unknown_readback,
                         "whole_actor_health": "UNKNOWN" if not complete else "TERMINAL_EVIDENCE"}
         # Missing evidence is not a whole-actor outage. Report a receipt gap only
         # when the collection is fresh and two distinct expected runs lack evidence.
@@ -148,14 +164,15 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
     full = [r for r in good if r.get("mode") == "FULL" and r.get("checkpoint",{}).get("verified") is True]
     full.sort(key=lambda r:r["observed_at"])
     last_full = full[-1] if full else None
+    checks["native_writer_active"] = writer_active
     checks["calendar_writer"] = "VERIFIED_RECEIPTS" if good else "UNAVAILABLE"
     checks["calendar_state"] = "AVAILABLE" if isinstance(state.get("feedback"),dict) else "UNAVAILABLE"
     checks["last_good_full"] = last_full.get("observed_at") if last_full else None
-    if last_full and now-stamp(last_full["observed_at"]) > dt.timedelta(hours=36):
+    if writer_active and last_full and now-stamp(last_full["observed_at"]) > dt.timedelta(hours=36):
         alarm("P1","distiller","full_readback_older_than_36h","vps:calendar-writer/runs")
     elif not last_full:
         checks["full_age"] = "UNKNOWN_no_native_full"
-    if good:
+    if writer_active and good:
         first = min(stamp(r["observed_at"]) for r in good)
         due_slots = []
         for days in (1,0):
@@ -199,7 +216,7 @@ def evaluate(now, snapshot, ledger, calendar, runs, state, failure=None):
     checks["limits"] = ["No erased-between-polls detection","No whole-platform outage claim",
         "Unstructured legacy conditions remain unparsed; missing subset is not whole-actor failure"]
     scan_verified = bool(last_full) and bool(last_full.get("coverage")) and all(w.get("complete") is True for w in last_full["coverage"])
-    comparable = fresh and unparsed == 0 and scan_verified and checks["calendar_state"] == "AVAILABLE" and all(checks[x]["terminal_dates"] for x in DUE)
+    comparable = writer_active and fresh and unparsed == 0 and scan_verified and checks["calendar_state"] == "AVAILABLE" and all(checks[x]["terminal_dates"] and not checks[x]["unverified_effect_dates"] for x in DUE)
     return {"schema":"fabric-failure-alarm/1","observed_at":now.isoformat(),
             "alerts":sorted(set(alerts)),"evidence":evidence,"checks":checks,
             "comparable_coverage":comparable,"model_calls":0,"provider_reads":0,
@@ -209,7 +226,9 @@ def collect(now=None, base=BASE):
     now = now or dt.datetime.now(UTC)
     ledger = [load(p,{}) for p in sorted((base/"receipts").glob("*.json")) if re.fullmatch("[0-9a-f]{64}.json",p.name)]
     runs = [load(p,{}) for p in sorted((base/"calendar-writer/runs").glob("*_write.json"))[-100:]]
+    activation = load(Path("/etc/ziji-fabric/calendar-writer-activation.json"),{})
+    writer_active = activation.get("enabled") is True and activation.get("hosted_writer_disabled") is True
     return evaluate(now,load(base/"native-sources/jira.json",{}),ledger,
                     load(base/"calendar-writer/latest.json",{}),runs,
                     load(base/"calendar-writer/state.json",{}),
-                    load(base/"calendar-writer/failure.json",{}))
+                    load(base/"calendar-writer/failure.json",{}),writer_active=writer_active)

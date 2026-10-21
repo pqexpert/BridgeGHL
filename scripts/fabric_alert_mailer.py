@@ -112,7 +112,15 @@ def main(canary=False):
         evidence = {}
         if not canary and Path('/etc/ziji-fabric/failure-alarm.json').exists():
             from fabric_failure_alarm import collect
-            report = collect(now)
+            try:
+                report = collect(now)
+            except Exception:
+                # An unavailable Fabric source must not suppress existing host alerts.
+                report = {"alerts":["P1:evidence:receipt_comparator_unavailable"],"evidence":{},
+                    "observed_at":now.isoformat(),"comparable_coverage":False,
+                    "checks":{"jira":"UNAVAILABLE","unparsed_hosted_run_records":1,
+                        "calendar_writer":"UNAVAILABLE","calendar_state":"UNAVAILABLE",
+                        **{lane:{"unverified_effect_dates":["UNKNOWN"]} for lane in ("income","rsc","store")}}}
             atomic(ROOT/'fabric-latest.json',report)
             alerts = sorted(set(alerts + report['alerts']))
             evidence = report['evidence']
@@ -121,6 +129,7 @@ def main(canary=False):
             uncertain = set()
             if report['checks']['jira'] != 'VERIFIED' or report['checks']['unparsed_hosted_run_records']:
                 uncertain.update(('income','rsc','store','evidence'))
+            uncertain.update(lane for lane in ('income','rsc','store') if report['checks'][lane]['unverified_effect_dates'])
             if report['checks']['calendar_writer'] == 'UNAVAILABLE' or report['checks']['calendar_state'] == 'UNAVAILABLE':
                 uncertain.add('distiller')
             alerts = sorted(set(alerts + [a for a in previous.get('alerts',[]) if a.split(':')[1] in uncertain]))
