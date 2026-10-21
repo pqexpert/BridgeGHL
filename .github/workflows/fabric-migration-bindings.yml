@@ -1,0 +1,21 @@
+name: Locate existing native migration bindings
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/fabric_migration_inventory.py', '.github/workflows/fabric-migration-bindings.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read native-provider credential names only
+        env:
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+        run: python3 scripts/fabric_migration_inventory.py
