@@ -1,0 +1,61 @@
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('bindings', Path(__file__).parents[1]/'scripts/bind_native_providers.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+class BindingsTest(unittest.TestCase):
+    def test_arbitrary_shop_destination_rejected_before_request(self):
+        for domain in ['evil.example', 'store.myshopify.com@evil.example', 'store.myshopify.com/path']:
+            with self.assertRaises(m.ProbeError):
+                m.shopify({'SHOPIFY_SHOP_DOMAIN':domain,'SHOPIFY_CLIENT_ID':'id','SHOPIFY_CLIENT_SECRET':'secret'},
+                          lambda *a, **k: self.fail('request escaped domain check'))
+
+    def test_wrong_store_never_persisted_and_jira_failure_is_independent(self):
+        cfg={'JIRA_EMAIL':'test@example.com','JIRA_API_TOKEN':'secret','SHOPIFY_SHOP_DOMAIN':'test.myshopify.com',
+             'SHOPIFY_CLIENT_ID':'id','SHOPIFY_CLIENT_SECRET':'secret'}
+        def call(url, *a, **k):
+            if 'atlassian.com' in url:
+                raise m.ProbeError('http_401')
+            if url.endswith('/access_token'):
+                return {'access_token':'never-log-this'}
+            return {'data':{'shop':{'name':'Wrong store'}}}
+        with tempfile.TemporaryDirectory() as td, patch.object(m, 'google_inventory', return_value={}):
+            result=m.run_server(cfg, Path(td)/'bindings', call)
+            self.assertEqual(result['results']['jira']['status'],'http_401')
+            self.assertEqual(result['results']['shopify']['status'],'shop_identity_mismatch')
+            self.assertFalse((Path(td)/'bindings').exists())
+            self.assertNotIn('never-log-this',json.dumps(result))
+
+    def test_existing_binding_preserved_and_permissions_private(self):
+        with tempfile.TemporaryDirectory() as td:
+            base=Path(td)/'providers'
+            self.assertEqual(m.persist(base,'jira',{'token':'one'}),'installed_verified')
+            self.assertEqual((base/'jira/credentials.json').stat().st_mode & 0o777,0o600)
+            self.assertEqual(m.persist(base,'jira',{'token':'one'}),'already_present_verified')
+            with self.assertRaises(m.ProbeError):
+                m.persist(base,'jira',{'token':'two'})
+            self.assertEqual(json.loads((base/'jira/credentials.json').read_text()),{'token':'one'})
+
+    def test_successful_shop_independent_of_jira_and_no_token_in_receipt(self):
+        cfg={'SHOPIFY_SHOP_DOMAIN':'test.myshopify.com','SHOPIFY_CLIENT_ID':'id','SHOPIFY_CLIENT_SECRET':'secret'}
+        def call(url, *a, **k):
+            if url.endswith('/access_token'):
+                return {'access_token':'never-log-this'}
+            return {'data':{'shop':{'name':'Tantric Treasures','email':'store@dzokden.org','currencyCode':'USD',
+                    'primaryDomain':{'host':'www.tantrictreasures.com'}},
+                    'currentAppInstallation':{'accessScopes':[{'handle':'read_products'}]}}}
+        with tempfile.TemporaryDirectory() as td, patch.object(m,'google_inventory',return_value={}):
+            r=m.run_server(cfg,Path(td)/'bindings',call)
+            self.assertEqual(r['results']['jira']['status'],'binding_missing')
+            self.assertEqual(r['results']['shopify']['binding'],'installed_verified')
+            self.assertNotIn('never-log-this',json.dumps(r))
+            self.assertNotIn('secret',json.dumps(r))
+
+if __name__=='__main__':
+    unittest.main()
