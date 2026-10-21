@@ -42,7 +42,15 @@ def _resolve(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]
         if not isinstance(target, dict):
             raise TypeError(f"JSON Schema reference does not resolve to an object: {ref}")
         siblings = {key: value for key, value in resolved.items() if key != "$ref"}
-        resolved = {**target, **siblings}
+        collisions = (target.keys() & siblings.keys()) - _IGNORED_SCHEMA_KEYS
+        if collisions:
+            # JSON Schema applies the referenced constraints AND siblings.
+            # Keep the target's fields visible and retain siblings conjunctively;
+            # a shallow merge would silently weaken colliding constraints.
+            resolved = dict(target)
+            resolved["allOf"] = [*target.get("allOf", []), siblings]
+        else:
+            resolved = {**target, **siblings}
     return resolved
 
 

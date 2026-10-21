@@ -94,3 +94,20 @@ def test_task_annotations_expose_safe_replay_and_delete_semantics():
     )
     assert tools["execute_task_create"]["annotations"]["destructiveHint"] is False
     assert tools["execute_task_delete"]["annotations"]["destructiveHint"] is True
+
+
+def test_colliding_ref_sibling_cannot_weaken_target_constraint():
+    document = copy.deepcopy(app.app.openapi())
+    route = TASK_TOOL_ROUTES["execute_task_create"]
+    schema = document["paths"][route]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    target = document["components"]["schemas"]["TaskCreateRequest"]
+    target["maxProperties"] = 1
+    schema["maxProperties"] = 10
+    tools = _tools_document()
+    _tool(tools, "execute_task_create")["inputSchema"]["maxProperties"] = 10
+
+    assert "execute_task_create request schema differs" in verify_task_contract(
+        tools, document
+    )
