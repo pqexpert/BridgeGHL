@@ -1,0 +1,60 @@
+name: Provision bounded native Income unit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/provision-income-native.yml', 'scripts/provision_income_native.py', 'scripts/income_career_pinned.py', 'scripts/income_career_pin.json']
+permissions:
+  contents: read
+jobs:
+  provision:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    concurrency:
+      group: bridgeghl-production
+      cancel-in-progress: false
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare existing SSH transport
+        shell: bash
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          try:
+              raw = os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n", "\n")
+              if "PRIVATE KEY" not in raw:
+                  raw = base64.b64decode("".join(raw.split()), validate=True).decode().strip()
+              p = Path.home() / ".ssh/fabric-preflight"
+              p.touch(mode=0o600, exist_ok=False)
+              p.write_text(raw + "\n")
+          except Exception:
+              raise SystemExit("Existing SSH key could not be prepared; value withheld")
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Existing independently verified duck transport host key; never trust a fresh scan.
+          test "$REMOTE_HOST" = "74.208.52.45"
+          cat > ~/.ssh/fabric-known-hosts <<'PINNED_HOST'
+          74.208.52.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIFH9lGiaAYMJi/KGGPAKPPz0dQGcCWdY8c6eLNlMr79
+          PINNED_HOST
+          chmod 600 ~/.ssh/fabric-known-hosts
+
+
+      - name: Execute pinned Income research unit
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          INCOME_NATIVE_INTAKE_JSON: ${{ secrets.INCOME_NATIVE_INTAKE_JSON }}
+        run: python3 scripts/provision_income_native.py
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts

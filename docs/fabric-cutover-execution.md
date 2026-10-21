@@ -39,3 +39,7 @@ The existing project authority continues; the infrastructure and recovery eviden
 - Income: a bounded native implementation and two focused checks exist locally, but publishing was rejected by automatic approval for the income-accelerator repository. It is not deployed. Current canonical tracker work distinguishes a Harvested role from qualification or submission. No fabricated native actor acceptance or replacement of canonical Notion access is claimed.
 
 Prefer deterministic event/code execution and reuse current evidence within the existing shared usage budget. Report actual call counts; money saved remains UNKNOWN without provider metering. Keep unresolved work scoped and preserve all verified independent infrastructure.
+
+## Approved continuation — 2026-10-21
+
+The owner explicitly approved the next 99 pqexpert estate PRs with associated publishing and merges, consistent with Ziji governance. Resumed PR 1/99 is [Income PR5](https://github.com/pqexpert/income-accelerator/pull/5); this protected deployment change is PR 2/99. Source-bound career research is a bounded unit, not full actor cutover. Private expiring intake stays in the existing protected environment and root-only server config; no new schedule or external-send authority is introduced.

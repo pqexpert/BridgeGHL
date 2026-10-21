@@ -53,9 +53,12 @@ jobs:
           p.write_text(raw+'\n')
           PY
           ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
-          # Reuses existing deployment host discovery; no independent pin is claimed.
-          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
-          test -s ~/.ssh/fabric-known-hosts
+          # Reuse the independently verified VPS key; never trust a fresh network scan.
+          test "$REMOTE_HOST" = "74.208.52.45"
+          cat > ~/.ssh/fabric-known-hosts <<'PINNED_HOST'
+          74.208.52.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIFH9lGiaAYMJi/KGGPAKPPz0dQGcCWdY8c6eLNlMr79
+          PINNED_HOST
+          chmod 600 ~/.ssh/fabric-known-hosts
       - name: Capture, encrypt, upload, download and verify recovery
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
