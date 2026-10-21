@@ -149,6 +149,34 @@ def download_asset(asset_id, target):
             out.write(data)
 
 
+def verify_local_recovery(server_stream):
+    """Verify the inner laptop capsule directly from the downloaded server tar."""
+    from local_recovery_snapshot import read_latest, LIMIT
+    prefix = "var/lib/ziji-fabric/local-recovery/duck/"
+    with tarfile.open(fileobj=server_stream, mode="r:gz") as archive:
+        try:
+            pointer = archive.getmember(prefix + "latest.json")
+        except KeyError:
+            return {"outcome": "UNAVAILABLE", "reason": "no_local_capsule"}
+        if not pointer.isfile() or pointer.size > 4096:
+            raise ValueError("invalid_local_recovery_pointer")
+        record = json.load(archive.extractfile(pointer))
+        identity = record["ciphertext_sha256"]
+        if not re.fullmatch("[0-9a-f]{64}", identity):
+            raise ValueError("invalid_local_recovery_identity")
+        with tempfile.TemporaryDirectory(prefix="local-recovery-verify-") as tmp:
+            root = Path(tmp)
+            (root / "latest.json").write_text(json.dumps(record))
+            for name in (identity + ".aesgcm", identity + ".key"):
+                member = archive.getmember(prefix + name)
+                if not member.isfile() or member.size > LIMIT:
+                    raise ValueError("invalid_local_recovery_member")
+                (root / name).write_bytes(archive.extractfile(member).read())
+            manifest, files = read_latest(root)
+            return {"outcome": "VERIFIED", "fingerprint": manifest["fingerprint"],
+                    "entries": len(files), "download_decrypt_verified": True}
+
+
 def main():
     os.umask(0o077)
     repo = api('/repos/' + DESTINATION)
@@ -236,10 +264,11 @@ def main():
                     f=archive.extractfile(member)
                     for chunk in iter(lambda:f.read(1024*1024),b''): h.update(chunk)
                     if h.hexdigest()!=expected: raise ValueError('restored_member_digest_mismatch')
+                local_recovery = verify_local_recovery(archive.extractfile('server.tar.gz'))
             receipt = {'stage':'FABRIC_GITHUB_BACKUP','outcome':'PASS','release_url':release['html_url'],
                 'ciphertext_sha256':digest(encrypted),'encrypted_bytes':encrypted.stat().st_size,
                 'key_id':manifest['key_id'],'repository_count':len(heads),'download_decrypt_verified':True,
-                'server_snapshot':report,'native_saas_exported':False,'services_restarted':False}
+                'server_snapshot':report,'local_recovery':local_recovery,'native_saas_exported':False,'services_restarted':False}
             print(json.dumps(receipt,sort_keys=True))
             Path(os.environ.get('GITHUB_STEP_SUMMARY','backup-summary.md')).write_text(
                 'Encrypted recovery backup verified: '+release['html_url']+'\n\nSHA-256: '+receipt['ciphertext_sha256']+
