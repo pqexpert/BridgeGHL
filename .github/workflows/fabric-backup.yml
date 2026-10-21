@@ -1,0 +1,68 @@
+name: Encrypted Fabric recovery backup
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 7 * * *'
+  pull_request:
+    paths: ['scripts/fabric_github_backup.py', 'scripts/fabric_snapshot.py', 'tests/test_fabric_backup.py', 'tests/test_fabric_snapshot.py', '.github/workflows/fabric-backup.yml']
+  push:
+    branches: [main]
+    paths: ['scripts/fabric_github_backup.py', 'scripts/fabric_snapshot.py', '.github/workflows/fabric-backup.yml']
+permissions:
+  contents: read
+concurrency:
+  group: fabric-recovery-backup
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install cryptography PyNaCl
+      - run: python3 -m unittest discover -s tests -p 'test_fabric_snapshot.py'
+      - run: python3 -m unittest discover -s tests -p 'test_fabric_backup.py'
+  backup:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install cryptography PyNaCl
+      - name: Prepare existing SSH transport
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          raw = os.environ['SSH_PRIVATE_KEY'].strip().replace('\\n', '\n')
+          if 'PRIVATE KEY' not in raw:
+              raw = base64.b64decode(''.join(raw.split()), validate=True).decode().strip()
+          p = Path.home()/'.ssh/fabric-preflight'
+          p.touch(mode=0o600, exist_ok=False)
+          p.write_text(raw+'\n')
+          PY
+          ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
+          # Reuses existing deployment host discovery; no independent pin is claimed.
+          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
+          test -s ~/.ssh/fabric-known-hosts
+      - name: Capture, encrypt, upload, download and verify recovery
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+          BACKUP_KEY: ${{ secrets.FABRIC_BACKUP_KEY_V1 }}
+        run: python3 scripts/fabric_github_backup.py
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/fabric-preflight ~/.ssh/fabric-known-hosts
