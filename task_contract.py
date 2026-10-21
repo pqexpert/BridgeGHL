@@ -29,12 +29,21 @@ _SCHEMA_COMBINATORS = {"allOf", "anyOf", "oneOf"}
 
 
 def _resolve(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
-    while "$ref" in schema:
+    resolved = dict(schema)
+    seen: set[str] = set()
+    while "$ref" in resolved:
+        ref = resolved["$ref"]
+        if ref in seen:
+            raise ValueError(f"cyclic JSON Schema reference: {ref}")
+        seen.add(ref)
         target: Any = document
-        for part in schema["$ref"].removeprefix("#/").split("/"):
+        for part in ref.removeprefix("#/").split("/"):
             target = target[part.replace("~1", "/").replace("~0", "~")]
-        schema = target
-    return schema
+        if not isinstance(target, dict):
+            raise TypeError(f"JSON Schema reference does not resolve to an object: {ref}")
+        siblings = {key: value for key, value in resolved.items() if key != "$ref"}
+        resolved = {**target, **siblings}
+    return resolved
 
 
 def _normalize_schema(document: dict[str, Any], schema: Any) -> Any:
