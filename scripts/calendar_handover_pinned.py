@@ -22,17 +22,15 @@ def stamp(value):
 def split_description(value):
     if not isinstance(value, str):
         raise ValueError("description_missing")
-    # END contains START: count complete marker lines, preserving all original bytes.
-    lines = value.splitlines(keepends=True)
-    markers = [(i, line.strip()) for i, line in enumerate(lines)
-               if line.strip() in {START, END, HUMAN}]
-    if [kind for _, kind in markers] != [START, END, HUMAN]:
+    # Calendar descriptions may wrap markers in HTML or Markdown. Match unique
+    # literal tokens without stripping or rewriting any source characters.
+    if value.count(START) != 2 or value.count(END) != 1 or value.count(HUMAN) != 1:
         raise ValueError("ambiguous_description_markers")
-    first, end, human = [i for i, _ in markers]
-    if first != 0 or end >= human:
+    first, end, human = value.index(START), value.index(END), value.index(HUMAN)
+    if not first < end < human:
         raise ValueError("ambiguous_description_boundaries")
-    # Everything after END belongs to the preserved human suffix.
-    return "".join(lines[:end + 1]), "".join(lines[end + 1:])
+    boundary = end + len(END)
+    return value[:boundary], value[boundary:]
 
 def protected(event):
     return {k: v for k, v in event.items() if k not in VOLATILE}
