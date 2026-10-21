@@ -1,0 +1,28 @@
+name: Provision private local transport
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [provision, verify]
+        default: provision
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: bridgeghl-production
+  cancel-in-progress: false
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision or verify private local transport
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+          TRANSPORT_PHASE: ${{ inputs.phase }}
+        run: python3 scripts/provision_local_transport.py --phase "$TRANSPORT_PHASE"
