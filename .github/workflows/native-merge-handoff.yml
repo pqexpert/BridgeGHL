@@ -1,0 +1,46 @@
+name: Native RSC merge evidence
+on:
+  pull_request_target:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [observe, prove, activate, standby]
+        default: observe
+      repository:
+        type: choice
+        options: [pqexpert/BridgeGHL, pqexpert/rsc-operations-console]
+        default: pqexpert/BridgeGHL
+      pull_request:
+        type: string
+        default: '75'
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+concurrency:
+  group: native-merge-handoff
+  cancel-in-progress: false
+jobs:
+  handoff:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    environment: zijifabric
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify merge and persist bounded native evidence
+        env:
+          SOURCE_TOKEN: ${{ secrets.GIT_PAT }}
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
+          HANDOFF_MODE: ${{ inputs.mode || 'event' }}
+          HANDOFF_REPO: ${{ inputs.repository || github.repository }}
+          HANDOFF_PR: ${{ inputs.pull_request || github.event.pull_request.number }}
+        run: python3 scripts/native_merge_handoff.py
