@@ -70,6 +70,20 @@ def test_request_level_constraint_drift_is_reported():
     )
 
 
+def test_ref_sibling_constraint_drift_is_reported():
+    document = copy.deepcopy(app.app.openapi())
+    route = TASK_TOOL_ROUTES["execute_task_create"]
+    schema = document["paths"][route]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert "$ref" in schema
+    schema["maxProperties"] = 1
+
+    assert "execute_task_create request schema differs" in verify_task_contract(
+        _tools_document(), document
+    )
+
+
 def test_task_annotations_expose_safe_replay_and_delete_semantics():
     tools = {tool["name"]: tool for tool in _tools_document()["tools"]}
     assert tools["dry_run_task_create"]["annotations"]["idempotentHint"] is True
