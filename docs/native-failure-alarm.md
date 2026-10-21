@@ -1,0 +1,15 @@
+# Native Failure Alarm
+
+The comparator reads existing root-only Jira snapshots, published receipt ledger and Calendar writer run/state files. It makes zero provider requests or model calls. Installation reuses the minute19 hourly owner-only AgentMail cron and verified recipient binding; it sends no acceptance email. The existing host monitor remains intact.
+
+Daily terminal evidence must explicitly identify income/rsc/store:YYYY-MM-DD:daily or scope=daily plus local_date. whole_actor_replaced=false never satisfies a whole-run check. SUCCESS/NO_CHANGE needs native_readback=true; BLOCKED is a truthful terminal, not automatically failure. Two distinct missing or failed due dates produce a receipt-gap condition, never a claim of whole-actor outage. Recent unparsed hosted FABRIC_RUN evidence blocks that inference and comparable coverage.
+
+Native Distiller receipts provide successful FULL age, checkpoint verification, explicit paginated coverage, protected-field checks, repeated missing scheduled runs, latest failure and actual owner feedback pending more than24hours after a successful FULL. Empty successful feedback scans remain healthy. AMBIGUOUS owner text is not verified owner input. Provider ETags are available for current compare-and-swap, but there is no historical version/erased-between-polls guarantee.
+
+Structured material_conditions carry verified=true, active=true/false and a stable code. Explicit P0 safety violations bypass the existing one-hour mail cooldown; ordinary unchanged condition sets remain silent. A later verified active=false clears that condition. Provider cost stays UNKNOWN without native charge data. No absence of replies/orders/notes is considered failure. Source uncertainty preserves previously reported conditions instead of fabricating recovery.
+
+Inspect deployment installs code and records aggregate coverage without enabling Fabric mail. Activate requires comparable_coverage=true: fresh native Jira collection, no recent unparsed hosted terminals, each daily actor terminal evidence and a successful FULL with verified complete feedback coverage. Root controls retirement of the matching hosted alarm. Do not disable it merely because deployment or tests passed. Legacy free-form critical/deadline signals require explicit source translation; this implementation does not claim arbitrary-text semantic parity.
+
+Operator workflow: deploy-failure-alarm.yml mode=inspect; read private /var/lib/ziji-fabric/alerts/fabric-latest.json. Once source coverage is accepted and hosted alarm is disabled, mode=activate enables the existing mailer to include Fabric conditions. Rollback removes only /etc/ziji-fabric/failure-alarm.json before re-enabling hosted monitoring. Existing host alerts remain.
+
+Focused verification covers healthy silence/replay, truthful subset isolation, unparsed legacy evidence, explicit P0 recovery, verified owner feedback timing and FULL freshness. Existing mail tests cover exact replay, owner pin, uncertain send hold and rate limiting. The previously accepted real AgentMail receipt is reused; no synthetic owner feedback or test notification is created.

@@ -69,7 +69,7 @@ def jira_snapshot(cfg, call=request):
             raise ProbeError('jira_pagination_invalid')
         for row in rows:
             body = text_content(row.get('body', {}))
-            if any(marker in body for marker in ('FABRIC_FINDING', 'FABRIC_CHECKPOINT', 'FABRIC_HANDOFF')):
+            if any(marker in body for marker in ('FABRIC_RUN', 'FABRIC_FINDING', 'FABRIC_CHECKPOINT', 'FABRIC_HANDOFF', 'FABRIC_CALENDAR_FEEDBACK_BASELINE')):
                 comments.append({'id':row['id'], 'created':row['created'], 'updated':row['updated'],
                                  'body':body, 'reference':'https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId='+row['id']})
         start += len(rows)
