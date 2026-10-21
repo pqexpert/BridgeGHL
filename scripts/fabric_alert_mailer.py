@@ -121,6 +121,7 @@ def main(canary=False):
             uncertain = set()
             if report['checks']['jira'] != 'VERIFIED' or report['checks']['unparsed_hosted_run_records']:
                 uncertain.update(('income','rsc','store','evidence'))
+            uncertain.update(lane for lane in ('income','rsc','store') if report['checks'][lane]['unverified_effect_dates'])
             if report['checks']['calendar_writer'] == 'UNAVAILABLE' or report['checks']['calendar_state'] == 'UNAVAILABLE':
                 uncertain.add('distiller')
             alerts = sorted(set(alerts + [a for a in previous.get('alerts',[]) if a.split(':')[1] in uncertain]))

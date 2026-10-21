@@ -35,6 +35,15 @@ class AlarmTests(unittest.TestCase):
   r=evaluate(s,[],f)
   self.assertFalse(r["comparable_coverage"])
   self.assertFalse(any("receipt_gap" in x for x in r["alerts"]))
+ def test_actual_legacy_header_is_terminal_but_not_invented_effect_proof(self):
+  s,l,f=fixture();l=[x for x in l if x["receipt"]["lane"]!="store"]
+  s["receipt_candidates"]=[{"body":"FABRIC_RUN store:2026-10-21:daily — SUCCESS\nobserved_utc:2026-10-21T13:03:05Z | execution_identity:hosted_task:fixture\nEffect/readback: narrative",
+      "created":NOW.isoformat(),"reference":"jira:fixture"}]
+  r=evaluate(s,l,f)
+  self.assertIn("2026-10-21",r["checks"]["store"]["terminal_dates"])
+  self.assertIn("2026-10-21",r["checks"]["store"]["unverified_effect_dates"])
+  self.assertFalse(r["comparable_coverage"])
+  self.assertFalse(any("store:repeated_due_receipt_gap" in x for x in r["alerts"]))
  def test_new_verified_p0_and_explicit_recovery(self):
   s,l,f=fixture();record=l[-1]["receipt"]
   record["material_conditions"]=[{"code":"stop_dnd_violation","verified":True,"active":True}]
