@@ -2,10 +2,10 @@ name: Bind native Fabric providers
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['.github/workflows/bind-native-providers.yml', 'scripts/bind_native_providers.py', 'tests/test_native_provider_bindings.py']
+    paths: ['.github/workflows/bind-native-providers.yml', 'scripts/bind_native_providers.py', 'tests/test_native_provider_bindings.py', 'scripts/collect_native_sources.py', 'tests/test_native_sources.py']
   push:
     branches: [main]
-    paths: ['.github/workflows/bind-native-providers.yml', 'scripts/bind_native_providers.py']
+    paths: ['.github/workflows/bind-native-providers.yml', 'scripts/bind_native_providers.py', 'scripts/collect_native_sources.py']
 permissions:
   contents: read
 jobs:
@@ -16,6 +16,7 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s tests -p test_native_provider_bindings.py -v
+      - run: python3 -m unittest discover -s tests -p test_native_sources.py -v
   bind:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: validate
