@@ -1,9 +1,15 @@
 name: Provision bounded native Income unit
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [inspect, execute]
+        default: inspect
+        description: Read existing state or execute the admitted unit
   push:
     branches: [main]
-    paths: ['.github/workflows/provision-income-native.yml', 'scripts/provision_income_native.py', 'scripts/income_career_pinned.py', 'scripts/income_career_pin.json']
+    paths: ['.github/workflows/provision-income-native.yml', 'scripts/provision_income_native.py', 'scripts/income_career_pinned.py', 'scripts/income_career_pin.json', 'scripts/inspect_income_native.py']
 permissions:
   contents: read
 jobs:
@@ -53,6 +59,7 @@ jobs:
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          INCOME_MODE: ${{ inputs.mode || 'inspect' }}
           INCOME_NATIVE_INTAKE_JSON: ${{ secrets.INCOME_NATIVE_INTAKE_JSON }}
         run: python3 scripts/provision_income_native.py
       - name: Remove temporary SSH material

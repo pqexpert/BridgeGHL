@@ -12,6 +12,10 @@ def _server(payload):
     import sys
     import fcntl
     if os.geteuid()!=0:raise ValueError("root_required")
+    if payload.get("mode") == "inspect":
+        scope={"__name__":"income_inspection"}
+        exec(compile(payload["inspector"],"income_inspection.py","exec"),scope)
+        return scope["inspect"]()
     source=payload["runtime"]
     if hashlib.sha256(source.encode()).hexdigest()!=payload["sha256"]:raise ValueError("runtime_hash")
     sys.path.insert(0,"/opt/ziji-fabric/native")
@@ -59,7 +63,11 @@ def deploy():
     manifest=json.loads(here.with_name("income_career_pin.json").read_text())
     sha=hashlib.sha256(runtime.encode()).hexdigest()
     if manifest!={"source_commit":PIN,"sha256":sha}:raise ValueError("runtime_pin")
-    payload={"source":here.read_text(),"runtime":runtime,"sha256":sha,"intake":json.loads(os.environ["INCOME_NATIVE_INTAKE_JSON"])}
+    mode=os.environ.get("INCOME_MODE","inspect")
+    if mode not in {"inspect","execute"}:raise ValueError("invalid_mode")
+    payload={"source":here.read_text(),"runtime":runtime,"sha256":sha,"mode":mode,
+             "inspector":here.with_name("inspect_income_native.py").read_text()}
+    if mode=="execute":payload["intake"]=json.loads(os.environ["INCOME_NATIVE_INTAKE_JSON"])
     remote="sudo -n python3 -c 'import json,sys; p=json.load(sys.stdin); s={\"__name__\":\"income_deploy\"}; exec(compile(p[\"source\"],\"income_deploy\",\"exec\"),s); print(json.dumps(s[\"server\"](p),sort_keys=True))'"
     cmd=["ssh","-i",str(Path.home()/".ssh/fabric-preflight"),"-o","BatchMode=yes","-o","ConnectTimeout=15",
          "-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(Path.home()/".ssh/fabric-known-hosts"),user+"@"+host,remote]
@@ -67,6 +75,9 @@ def deploy():
     if result.returncode:raise ValueError("remote_income_failure_details_withheld")
     report=json.loads(result.stdout)
     print(json.dumps(report,sort_keys=True))
+    if mode=="inspect":
+        if report.get("read_only") is not True:raise ValueError("inspection_failed")
+        return
     if report.get("outcome")!="SUCCESS" or not report.get("native_receipt_readback"):
         raise ValueError("income_effect_not_verified")
 if __name__=="__main__":
