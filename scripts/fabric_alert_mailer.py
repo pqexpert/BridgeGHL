@@ -54,7 +54,7 @@ def classify(snapshot, now):
     except (KeyError, ValueError, TypeError):
         return ['P1:host:watchdog_receipt_invalid']
 
-def deliver(config, state_path, alerts, now, canary=False):
+def deliver(config, state_path, alerts, now, canary=False, evidence=None):
     if not owner(config.get('recipient')): raise ValueError('recipient_mismatch')
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     if state.get('phase') in ('intent','uncertain'):
@@ -63,16 +63,27 @@ def deliver(config, state_path, alerts, now, canary=False):
     if state.get('digest') == digest or (not alerts and not state):
         return {'outcome':'NO_CHANGE', 'messages_sent':0}
     sent_at = state.get('sent_at')
-    if sent_at and (now-dt.datetime.fromisoformat(sent_at)).total_seconds() < 3600:
+    if sent_at and (now-dt.datetime.fromisoformat(sent_at)).total_seconds() < 3600 and not any(a.startswith('P0:') and a not in state.get('alerts',[]) for a in alerts):
         return {'outcome':'RATE_LIMITED', 'messages_sent':0}
     # Pre-read binding before any send. Never follow redirects with credentials.
     binding = api(config['key'])
     if binding.get('inbox_id') != INBOX or binding.get('status') == 'paused' or binding.get('metadata',{}).get('alertRecipient') != config['recipient']:
         raise ValueError('provider_binding_mismatch')
-    subject = 'Ziji Fabric — IONOS email route test' if canary else ('Ziji Fabric — host failure' if alerts else 'Ziji Fabric — host recovered')
+    subject = 'Ziji Fabric — IONOS email route test' if canary else ('Ziji Fabric — material condition' if alerts else 'Ziji Fabric — verified recovery')
     text = ('This is the single authorized server-to-email acceptance test. No action is required. '
             'It verifies email transport only; full Fabric receipt monitoring remains staged.' if canary else
-            'IONOS deterministic host monitor observed: '+(', '.join(alerts) if alerts else 'recovery from the previously reported host condition')+'. Review RBO-97 for the owning recovery action.')
+            'Deterministic Fabric monitor observed: '+(', '.join(alerts) if alerts else 'verified recovery from the previously reported condition')+'. Review RBO-97 for the owning recovery action.')
+    if evidence and not canary:
+        details = []
+        for key in alerts:
+            item = evidence.get(key,{})
+            if item:
+                details.append(key+"; evidence="+str(item.get('reference'))+
+                    "; observed="+str(item.get('observed_at'))+
+                    "; safe default="+item.get('safe_default','Preserve last verified state')+
+                    "; attempted recovery="+item.get('attempted_recovery','Read-only reconciliation')+
+                    "; next action="+item.get('next_action','Inspect owning receipt'))
+        text += "\n" + "\n".join(details)
     intent = {'phase':'intent','digest':digest,'observed_at':now.isoformat(),'alerts':alerts}
     atomic(state_path,intent)
     try:
@@ -98,7 +109,22 @@ def main(canary=False):
                 if SNAPSHOT.is_symlink() or SNAPSHOT.stat().st_size>65536: raise ValueError('invalid_snapshot')
                 alerts=classify(json.loads(SNAPSHOT.read_text()),now)
             except (OSError,ValueError): alerts=['P1:host:watchdog_receipt_missing']
-        result=deliver(config, ROOT/('canary.json' if canary else 'delivery.json'),alerts,now,canary)
+        evidence = {}
+        if not canary and Path('/etc/ziji-fabric/failure-alarm.json').exists():
+            from fabric_failure_alarm import collect
+            report = collect(now)
+            atomic(ROOT/'fabric-latest.json',report)
+            alerts = sorted(set(alerts + report['alerts']))
+            evidence = report['evidence']
+            # Missing source coverage cannot establish a recovery.
+            previous = json.loads((ROOT/'delivery.json').read_text()) if (ROOT/'delivery.json').exists() else {}
+            uncertain = set()
+            if report['checks']['jira'] != 'VERIFIED' or report['checks']['unparsed_hosted_run_records']:
+                uncertain.update(('income','rsc','store','evidence'))
+            if report['checks']['calendar_writer'] == 'UNAVAILABLE':
+                uncertain.add('distiller')
+            alerts = sorted(set(alerts + [a for a in previous.get('alerts',[]) if a.split(':')[1] in uncertain]))
+        result=deliver(config, ROOT/('canary.json' if canary else 'delivery.json'),alerts,now,canary,evidence)
         atomic(ROOT/'latest.json',dict(result,observed_at=now.isoformat(),model_calls=0))
         print(json.dumps(result,sort_keys=True))
 
