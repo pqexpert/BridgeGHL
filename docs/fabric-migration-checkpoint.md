@@ -11,7 +11,7 @@ Controlling work: [RBO-97](https://restoration-mt.atlassian.net/browse/RBO-97). 
 | Shopify | Owner elected to retain existing hosted MCP route | Native app installation deferred; do not repeatedly retry it |
 | Notion | Deferred by owner | Not a migration prerequisite |
 | Recovery | Encrypted off-host archive downloaded, decrypted and checked; seven Git histories, 359 server entries, three SQLite snapshots | Not a native SaaS export or replacement-host boot test |
-| Local inference | Hugging Face connector authenticated; VPS has four CPUs and ~6.7 GiB available RAM | No connected Desktop Commander device; Ollama absent on VPS; local VS Code/Ollama not verified |
+| Local inference | Hugging Face connector authenticated; VPS has four CPUs and ~6.7 GiB available RAM | Desktop Commander duck connected; BridgeGHL checkout and Python 3.11 environment verified with 201 baseline tests; Ollama inference not installed or verified |
 
 Evidence: [Google binding](https://github.com/pqexpert/BridgeGHL/actions/runs/39666628336), [strict Jira identity](https://github.com/pqexpert/BridgeGHL/actions/runs/39666892719), [native collection](https://github.com/pqexpert/BridgeGHL/actions/runs/39667330246), [verified encrypted recovery](https://github.com/pqexpert/fabric-dispatch/releases/tag/server-backup-39641666530-3).
 
@@ -23,7 +23,7 @@ The collector is read-only. It fully pages RBO-97 comments and reads a rolling p
 
 The existing VPS Distiller service still produces proposals from submitted snapshots using its configured external model. Moving source storage onto a server does not make inference local. The Income source home is a recovery/instruction package, not a complete native autonomous mission runner. Hosted specialist schedules remain enabled until their actual source adapters and authorized effects have replacements.
 
-For local VS Code/Codex work, use the existing GitHub repositories and their AGENTS.md instructions. Check the local Ollama endpoint and installed model on that actual computer; this cloud session is a different environment. Desktop Commander currently reports no connected devices. The owner can attach the local device at https://mcp.desktopcommander.app/ if remote operation is desired. Do not expose Ollama publicly or assume ChatGPT connector credentials transfer to it. Hugging Face access here supports repository reads and jobs; no paid job or endpoint was started.
+For local VS Code/Codex work, use the existing GitHub repositories and their AGENTS.md instructions. Check the local Ollama endpoint and installed model on that actual computer; this cloud session is a different environment. Desktop Commander is connected to duck; the GitHub-authenticated checkout is `/home/jaden/projects/BridgeGHL`. Use Desktop Commander for local files, GitHub for reviewed live source, and the existing protected SSH workflow for IONOS. The Codex extension is installed; editor launch was not independently confirmed. Do not expose Ollama publicly or assume ChatGPT connector credentials transfer to it. Hugging Face access here supports repository reads and jobs; no paid job or endpoint was started.
 
 ## Next bounded implementation
 
@@ -32,3 +32,11 @@ For local VS Code/Codex work, use the existing GitHub repositories and their AGE
 3. Connect admitted source-bound specialist outputs to Distiller. Port Income and RSC mission units independently; retain the owner-selected hosted Store route.
 4. Transfer one Calendar writer only after native comparison and rollback evidence; then retire only its matching hosted invocation. Do not disable the hosted writer merely because OAuth works.
 5. Keep the daily encrypted recovery workflow and update RBO-97 with actual execution evidence.
+
+## Continuation — 2026-10-21 21:20 UTC
+
+PR #63 prepares current native-snapshot inspection and repairs three PR #62 findings: malformed prior metadata no longer prevents fresh lane collection; collector deployment failure preserves binding receipts but returns failure; direct runs default to manual, while the managed cron explicitly supplies its trigger. A recorded trigger is self-reporting, not independent scheduler evidence. These changes are pending merge and live deployment.
+
+The existing hosted Distiller task provided the exact four-series map and its owner-feedback contract. Keep private identifiers out of this public repository. Prior/current suffix comparison is only continuity evidence; it does not establish historical feedback consumption or grant write authority. The remaining work is native adapter integration, source-bound specialist execution and the deliberate sole-writer handover.
+
+Recovery evidence superseding attempt 3: https://github.com/pqexpert/fabric-dispatch/releases/tag/server-backup-39641666530-4 (download/decryption/member verification recorded in RBO-97/11958). RBO-97/11959 corrects the earlier claim that trigger=cron alone proved a scheduled invocation. Hosted specialists and Calendar writer remain active.
