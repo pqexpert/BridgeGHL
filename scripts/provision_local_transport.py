@@ -1,4 +1,5 @@
 """Provision a restricted loopback SSH link through existing deployment credentials."""
+import shutil
 import argparse, base64, hashlib, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile
 ROOT=pathlib.Path(globals().get("__file__","/opt/provision.py")).resolve().parents[1]
 DEST=pathlib.Path("/opt/ziji-fabric/local-link")
@@ -18,8 +19,12 @@ def remote(payload):
             write(DEST/name,base64.b64decode(files[name]),0o644)
         try:command(["python3","-c","from cryptography.hazmat.primitives.ciphers.aead import AESGCM"])
         except subprocess.CalledProcessError:
-            command(["apt-get","update"])
-            command(["apt-get","install","-y","python3-cryptography"])
+            if shutil.which("dnf"):
+                command(["dnf","install","-y","python3-cryptography"])
+            elif shutil.which("apt-get"):
+                command(["apt-get","update"])
+                command(["apt-get","install","-y","python3-cryptography"])
+            else:raise ValueError("python_cryptography_dependency_unavailable")
         directory=pathlib.Path("/var/lib/ziji-fabric/local-recovery/duck")
         directory.mkdir(parents=True,exist_ok=True);directory.chmod(0o700)
         command(["chown","ziji-local-link:ziji-local-link",str(directory)])
@@ -43,7 +48,10 @@ def remote(payload):
             if prior is None:conf.unlink()
             else:write(conf,prior,0o644)
             raise
-        command(["systemctl","reload","ssh"])
+        for service in ("sshd","ssh"):
+            if command(["systemctl","show","--property=LoadState","--value",service],text=True).stdout.strip()=="loaded":
+                command(["systemctl","reload",service]);break
+        else:raise ValueError("ssh_service_not_found")
         return {"status":"PROVISIONED","source_sha":payload["source_sha"],"listen":"127.0.0.1:18182","account":"ziji-local-link"}
     spec=importlib.util.spec_from_file_location("recovery",DEST/"local_recovery_snapshot.py")
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -65,7 +73,14 @@ def main():
     if args.remote:
         try:print(json.dumps(remote(json.load(sys.stdin)),sort_keys=True))
         except Exception as exc:
-            print(json.dumps({"status":"FAILED","error":type(exc).__name__}));sys.exit(1)
+            report={"status":"FAILED","error":type(exc).__name__}
+            if isinstance(exc,subprocess.CalledProcessError):
+                report["command"]=pathlib.Path(exc.cmd[0]).name;report["exit_code"]=exc.returncode
+                if pathlib.Path(exc.cmd[0]).name in {"sshd","systemctl","useradd","chown","apt-get","dnf"}:
+                    stderr=exc.stderr.decode(errors="replace") if isinstance(exc.stderr,bytes) else (exc.stderr or "")
+                    report["diagnostic"]=stderr[-1200:]
+            if isinstance(exc,ValueError):report["reason"]=str(exc)
+            print(json.dumps(report));sys.exit(1)
         return
     host=os.environ["REMOTE_HOST"];user=os.environ["REMOTE_USER"]
     if not re.fullmatch(r"[A-Za-z0-9.-]+",host) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*",user):raise ValueError("target")
