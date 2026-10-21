@@ -43,7 +43,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/bridgeghl-capacity >/dev/null
           ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           ssh -i ~/.ssh/bridgeghl-capacity -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -uo pipefail
           python3 - <<'PY'
           import json, os, shutil, subprocess, sys, platform
           from pathlib import Path
@@ -88,8 +88,9 @@ jobs:
           if alerts:
               raise SystemExit(1)
           PY
+          capacity_status=$?
           sudo -n python3 - <<'PY_NATIVE'
-          import datetime as dt, hashlib, json
+          import datetime as dt, hashlib, json, fcntl, os
           from pathlib import Path
           root = Path('/var/lib/ziji-fabric/native-sources')
           report = {'stage':'NATIVE_MIGRATION_READBACK', 'model_calls':0, 'calendar_writes':0}
@@ -104,6 +105,9 @@ jobs:
                   raise ValueError('missing_timezone')
               return round((dt.datetime.now(dt.timezone.utc)-stamp).total_seconds())
           try:
+              lockfd = os.open(root/'run.lock', os.O_RDONLY | os.O_NOFOLLOW)
+              lock = os.fdopen(lockfd, 'r')
+              fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
               latest = read('latest.json')
               report['collection_age_seconds'] = age(latest['observed_at'])
               report['cron_trigger_recorded'] = latest.get('trigger') == 'cron'
@@ -130,11 +134,18 @@ jobs:
                   'unchanged_suffixes':sum(a==b for a,b in suffix_pairs),
                   'recurring_events':sum(bool(e.get('recurringEventId')) for e in current['events']),
                   'writer_allowlist_established':False, 'historical_feedback_consumed':False}
-              report['inspection'] = 'completed'
+              passed = report['collection_fresh'] and all(
+                  report[lane]['retrieved'] and report[lane]['digest_matches']
+                  and 0 <= report[lane]['snapshot_age_seconds'] <= 4500
+                  for lane in ('jira','calendar'))
+              report['inspection'] = 'verified' if passed else 'failed'
           except Exception:
               report['inspection'] = 'incomplete_details_withheld'
           print(json.dumps(report,sort_keys=True))
+          raise SystemExit(0 if report['inspection'] == 'verified' else 1)
           PY_NATIVE
+          native_status=$?
+          if [ "$capacity_status" -ne 0 ] || [ "$native_status" -ne 0 ]; then exit 1; fi
           REMOTE
       - name: Remove SSH material
         if: always()
