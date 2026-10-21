@@ -63,7 +63,7 @@ def jira(config, call=request):
     headers = {'Authorization': 'Basic ' + auth}
     identity = call(JIRA_ROOT + '/rest/api/3/myself', headers)
     if (not identity.get('active') or not identity.get('accountId') or
-        (identity.get('emailAddress') and identity['emailAddress'].lower() != config['JIRA_EMAIL'].lower())):
+        (not isinstance(identity.get('emailAddress'), str) or identity['emailAddress'].lower() != config['JIRA_EMAIL'].lower())):
         raise ProbeError('jira_identity_mismatch')
     issue = call(JIRA_ROOT + '/rest/api/3/issue/RBO-97?fields=project', headers)
     if issue.get('key') != 'RBO-97' or issue.get('fields', {}).get('project', {}).get('key') != 'RBO':
