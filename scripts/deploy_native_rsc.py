@@ -19,8 +19,9 @@ def remote(payload):
         atomic(destination,value)
         if destination.read_text()!=value:raise ValueError("source_readback")
     run=subprocess.run(["python3",str(root/"native_rsc.py")],capture_output=True,text=True,timeout=240)
-    if run.returncode:raise ValueError("rsc_execution_failed_"+run.stdout[-200:])
     result=json.loads(run.stdout)
+    if run.returncode:
+        return {k:result.get(k) for k in ("lane","outcome","reason","error","jira_receipt")}
     result["stage"]="RSC_NATIVE_UNIT"
     result["cron_created"]=False
     # Candidate is public-safe source-derived CURRENT-STATE only, no model/feedback.
@@ -38,6 +39,7 @@ def main():
     run=subprocess.run(args,input=json.dumps(payload),text=True,capture_output=True,timeout=300)
     if run.returncode:raise ValueError("remote_native_rsc_failed")
     print(run.stdout.strip())
+    if json.loads(run.stdout).get("outcome") not in ("SUCCESS","NO_CHANGE"):raise SystemExit(1)
 if __name__=="__main__":
     try:main()
     except Exception as exc:
