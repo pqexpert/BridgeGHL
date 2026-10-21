@@ -36,7 +36,7 @@ def private(path):
         raise ValueError("private_file_required")
     return json.loads(path.read_text())
 def http(url, headers=None, data=None, method=None, raw=False):
-    req=urllib.request.Request(url,headers=headers or {},data=data,method=method)
+    req=urllib.request.Request(url,headers={"User-Agent":"ZijiFabric/1.0 (career research)","Accept":"application/json",**(headers or {})},data=data,method=method)
     try:
         with urllib.request.build_opener(NoRedirect).open(req,timeout=30) as response:
             body=response.read(2000001)
