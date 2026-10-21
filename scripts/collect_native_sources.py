@@ -105,7 +105,7 @@ def calendar_snapshot(cfg, now, call=request):
         params['pageToken'] = nxt
     raise ProbeError('calendar_pagination_limit')
 
-def collect():
+def collect(trigger='cron'):
     if STATE.is_symlink():
         raise ProbeError('state_path_symlink')
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -114,7 +114,10 @@ def collect():
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
         now = dt.datetime.now(dt.timezone.utc)
         report = {'stage':'NATIVE_SOURCE_COLLECTION', 'observed_at':now.isoformat(),
-                  'model_calls':0, 'calendar_writes':0, 'external_messages':0, 'actor_execution_verified':False}
+                  'trigger':trigger, 'model_calls':0, 'calendar_writes':0, 'external_messages':0, 'actor_execution_verified':False}
+        if (STATE/'latest.json').exists():
+            prior = json.loads((STATE/'latest.json').read_text())
+            report['previous_collection'] = {k:prior.get(k) for k in ('observed_at','trigger')}
         for lane, fn in (('jira',lambda: jira_snapshot(config('jira'))),
                          ('calendar',lambda: calendar_snapshot(config('google'),now))):
             try:
@@ -146,7 +149,7 @@ def install(source, binding_source):
         raise ProbeError('existing_cron_conflict_preserved')
     atomic(ROOT/'bind_native_providers.py',binding_source)
     atomic(ROOT/'collect_native_sources.py',source)
-    result = collect()
+    result = collect('installation_validation')
     ready = all(result[x]['status']=='retrieved_and_persisted' for x in ('jira','calendar'))
     if ready:
         atomic(CRON,cron,0o644)
