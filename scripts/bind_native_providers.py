@@ -236,27 +236,37 @@ def collect_remote(payload, receipt):
         receipt['collection'] = {'status':'installation_failed_inspect_before_retry'}
     return receipt
 
+
+def deployment_succeeded(receipt):
+    results = receipt.get('results', {})
+    collection = receipt.get('collection', {})
+    return (all(results.get(lane, {}).get('binding') in
+                ('installed_verified', 'already_present_verified') for lane in ('jira', 'google'))
+            and collection.get('cron_installed') is True
+            and all(collection.get(lane, {}).get('status') == 'retrieved_and_persisted'
+                    for lane in ('jira', 'calendar')))
+
 def deploy():
     user, host = os.environ['REMOTE_USER'], os.environ['REMOTE_HOST']
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', user) or not re.fullmatch(r'[A-Za-z0-9.:-]+', host):
         raise ProbeError('ssh_target_invalid')
     payload = {'source':Path(__file__).read_text(), 'collector':Path(__file__).with_name('collect_native_sources.py').read_text(),
                'config':{k:os.environ.get(k, '').strip() for k in KEYS}}
-    remote = "sudo -n python3 -c 'import json,sys,types; p=json.load(sys.stdin); m=types.ModuleType(\"bind_native_providers\"); sys.modules[m.__name__]=m; exec(compile(p[\"source\"],\"binding\",\"exec\"),m.__dict__); r=m.run_server(p[\"config\"]); print(json.dumps(m.collect_remote(p,r),sort_keys=True))'"
+    remote = "sudo -n python3 -c 'import json,sys,types; p=json.load(sys.stdin); m=types.ModuleType(\"bind_native_providers\"); sys.modules[m.__name__]=m; exec(compile(p[\"source\"],\"binding\",\"exec\"),m.__dict__); r=m.run_server(p[\"config\"]); r=m.collect_remote(p,r); print(json.dumps(r,sort_keys=True)); sys.exit(0 if m.deployment_succeeded(r) else 1)'"
     command = ['ssh', '-i', str(Path.home()/'.ssh/fabric-preflight'), '-o','BatchMode=yes', '-o','ConnectTimeout=15',
                '-o','IdentitiesOnly=yes', '-o','StrictHostKeyChecking=yes',
                '-o','UserKnownHostsFile='+str(Path.home()/'.ssh/fabric-known-hosts'), user+'@'+host, remote]
     result = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, timeout=240)
-    if result.returncode:
-        raise ProbeError('remote_binding_failed_details_withheld')
     receipt = json.loads(result.stdout)
     if receipt.get('stage') != 'NATIVE_PROVIDER_BINDINGS':
         raise ProbeError('receipt_invalid')
     print(json.dumps(receipt, sort_keys=True))
+    if result.returncode or not deployment_succeeded(receipt):
+        raise ProbeError('native_deployment_incomplete')
 
 if __name__ == '__main__':
     try:
         deploy()
     except Exception:
-        print('{"stage":"NATIVE_PROVIDER_BINDINGS","status":"transport_failed_details_withheld"}')
+        print('{"stage":"NATIVE_PROVIDER_BINDINGS","status":"deployment_failed_details_withheld"}')
         raise SystemExit(1)

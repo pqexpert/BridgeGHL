@@ -106,7 +106,7 @@ jobs:
           try:
               latest = read('latest.json')
               report['collection_age_seconds'] = age(latest['observed_at'])
-              report['scheduled_collection'] = latest.get('trigger') == 'cron'
+              report['cron_trigger_recorded'] = latest.get('trigger') == 'cron'
               report['collection_fresh'] = 0 <= report['collection_age_seconds'] <= 4500
               for lane in ('jira','calendar'):
                   status = latest.get(lane,{})
