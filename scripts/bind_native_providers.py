@@ -26,7 +26,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 def request(url, headers=None, body=None):
-    form = url.endswith('/admin/oauth/access_token')
+    form = url.endswith('/admin/oauth/access_token') or url == 'https://oauth2.googleapis.com/token'
     data = (urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()) if body is not None else None
     h = {'Accept': 'application/json', **(headers or {})}
     if data is not None:
@@ -133,6 +133,55 @@ def persist(base, lane, config):
         os.unlink(name)
     return 'installed_verified'
 
+def google(config, call=request):
+    required(config, ('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'))
+    token = call('https://oauth2.googleapis.com/token', body={
+        'grant_type':'refresh_token', 'client_id':config['GOOGLE_CLIENT_ID'],
+        'client_secret':config['GOOGLE_CLIENT_SECRET'], 'refresh_token':config['GOOGLE_REFRESH_TOKEN']})
+    if not isinstance(token.get('access_token'), str) or not token['access_token']:
+        raise ProbeError('google_access_token_missing')
+    headers = {'Authorization':'Bearer ' + token['access_token']}
+    owner = 'restorationconsultantsoutreach@gmail.com'
+    about = call('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)', headers)
+    if about.get('user', {}).get('emailAddress', '').lower() != owner:
+        raise ProbeError('google_identity_mismatch')
+    calendars, page, seen = [], None, set()
+    for _ in range(20):
+        params = {'maxResults':250}
+        if page:
+            params['pageToken'] = page
+        result = call('https://www.googleapis.com/calendar/v3/users/me/calendarList?' + urllib.parse.urlencode(params), headers)
+        calendars.extend(result.get('items', []))
+        page = result.get('nextPageToken')
+        if not page:
+            break
+        if page in seen:
+            raise ProbeError('google_calendar_pagination_repeated')
+        seen.add(page)
+    else:
+        raise ProbeError('google_calendar_pagination_incomplete')
+    woo = [c for c in calendars if c.get('summary') == 'WooCalendar' and c.get('accessRole') == 'owner']
+    receipt = {'authentication':'verified', 'account_identity':'verified', 'drive_read':'verified',
+               'calendar_list_read':'verified', 'calendar_count':len(calendars),
+               'woo_owned_matches':len(woo), 'calendar_writer_enabled':False, 'write_execution':'not_attempted'}
+    binding = {'client_id':config['GOOGLE_CLIENT_ID'], 'client_secret':config['GOOGLE_CLIENT_SECRET'],
+               'refresh_token':config['GOOGLE_REFRESH_TOKEN'], 'expected_email':owner}
+    if len(woo) == 1:
+        binding['calendar_id'] = woo[0]['id']
+        result = call('https://www.googleapis.com/calendar/v3/calendars/' + urllib.parse.quote(woo[0]['id'], safe='') + '/events?maxResults=1&fields=items(id)', headers)
+        receipt['calendar_event_read'] = 'verified'
+    return receipt, binding
+
+def host_inventory():
+    import shutil
+    services = {}
+    for name in ('bridgeghl', 'bridgeghl-mcp', 'ziji-distiller', 'ollama'):
+        r = subprocess.run(['systemctl','is-active',name], capture_output=True, text=True, timeout=10)
+        services[name] = r.stdout.strip() if r.stdout.strip() in ('active','inactive','failed','unknown') else 'unknown'
+    return {'services':services, 'cpu_count':os.cpu_count(),
+            'available_memory_kib':next((int(x.split()[1]) for x in Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:')), None),
+            'ollama_installed':bool(shutil.which('ollama')), 'gpu_tool_present':bool(shutil.which('nvidia-smi'))}
+
 def google_inventory():
     # Only known runtime config homes; inspect key names, never print values.
     found = set()
@@ -159,7 +208,7 @@ def google_inventory():
 
 def run_server(config, base=Path('/etc/ziji-fabric/providers'), call=request):
     results = {}
-    for lane, probe in (('jira', jira), ('shopify', shopify)):
+    for lane, probe in (('jira', jira), ('google', google)):
         try:
             receipt, binding = probe(config, call)
             receipt['binding'] = persist(base, lane, binding)
@@ -168,9 +217,9 @@ def run_server(config, base=Path('/etc/ziji-fabric/providers'), call=request):
             results[lane] = {'status':str(e), 'binding':'not_changed'}
         except Exception:
             results[lane] = {'status':'local_binding_error', 'binding':'inspect_before_retry'}
-    results['google'] = google_inventory()
+    results['shopify'] = {'status':'hosted_route_retained_native_deferred', 'binding':'not_changed'}
     results['google']['github_oauth_bindings_present'] = {k:bool(config.get(k)) for k in KEYS if k.startswith('GOOGLE_')}
-    return {'stage':'NATIVE_PROVIDER_BINDINGS', 'results':results, 'runtime_activation':False}
+    return {'stage':'NATIVE_PROVIDER_BINDINGS', 'results':results, 'host':host_inventory(), 'runtime_activation':False}
 
 def deploy():
     user, host = os.environ['REMOTE_USER'], os.environ['REMOTE_HOST']
