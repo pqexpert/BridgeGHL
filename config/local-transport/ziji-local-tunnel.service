@@ -1,0 +1,17 @@
+[Unit]
+Description=Private Ziji local inference SSH transport
+After=network-online.target ziji-local-model.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -F %h/.local/share/ziji-local/transport/ssh_config -N -T ziji-local-link
+Restart=always
+RestartSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=default.target
