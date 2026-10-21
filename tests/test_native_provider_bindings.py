@@ -40,12 +40,35 @@ class BindingsTest(unittest.TestCase):
             if url.endswith('/access_token'):
                 return {'access_token':'never-log-this'}
             return {'data':{'shop':{'name':'Wrong store'}}}
-        with tempfile.TemporaryDirectory() as td, patch.object(m, 'google_inventory', return_value={}):
+        with tempfile.TemporaryDirectory() as td, patch.object(m, 'host_inventory', return_value={}):
             result=m.run_server(cfg, Path(td)/'bindings', call)
             self.assertEqual(result['results']['jira']['status'],'http_401')
-            self.assertEqual(result['results']['shopify']['status'],'shop_identity_mismatch')
+            self.assertEqual(result['results']['shopify']['status'],'hosted_route_retained_native_deferred')
             self.assertFalse((Path(td)/'bindings').exists())
             self.assertNotIn('never-log-this',json.dumps(result))
+
+    def test_google_identity_and_pagination(self):
+        cfg={'GOOGLE_CLIENT_ID':'id','GOOGLE_CLIENT_SECRET':'secret','GOOGLE_REFRESH_TOKEN':'refresh'}
+        def call(url, *a, **kw):
+            if 'oauth2' in url:
+                return {'access_token':'never-log-this'}
+            if '/about?' in url:
+                return {'user':{'emailAddress':'restorationconsultantsoutreach@gmail.com'}}
+            if '/events?' in url:
+                return {'items':[]}
+            if 'pageToken' in url:
+                return {'items':[{'summary':'WooCalendar','accessRole':'owner','id':'private-id'}]}
+            return {'items':[], 'nextPageToken':'second'}
+        receipt, binding=m.google(cfg,call)
+        self.assertEqual(receipt['calendar_event_read'],'verified')
+        self.assertEqual(binding['calendar_id'],'private-id')
+        self.assertNotIn('never-log-this',json.dumps(receipt))
+        def wrong(url, *a, **kw):
+            if 'oauth2' in url:
+                return {'access_token':'never-log-this'}
+            return {'user':{'emailAddress':'wrong@example.com'}}
+        with self.assertRaisesRegex(m.ProbeError, 'google_identity_mismatch'):
+            m.google(cfg,wrong)
 
     def test_existing_binding_preserved_and_permissions_private(self):
         with tempfile.TemporaryDirectory() as td:
@@ -65,10 +88,9 @@ class BindingsTest(unittest.TestCase):
             return {'data':{'shop':{'name':'Tantric Treasures','email':'store@dzokden.org','currencyCode':'USD',
                     'primaryDomain':{'host':'www.tantrictreasures.com'}},
                     'currentAppInstallation':{'accessScopes':[{'handle':'read_products'}]}}}
-        with tempfile.TemporaryDirectory() as td, patch.object(m,'google_inventory',return_value={}):
-            r=m.run_server(cfg,Path(td)/'bindings',call)
-            self.assertEqual(r['results']['jira']['status'],'binding_missing')
-            self.assertEqual(r['results']['shopify']['binding'],'installed_verified')
+        with tempfile.TemporaryDirectory() as td, patch.object(m,'host_inventory',return_value={}):
+            r, binding=m.shopify(cfg,call)
+            self.assertEqual(r['authentication'],'verified')
             self.assertNotIn('never-log-this',json.dumps(r))
             self.assertNotIn('secret',json.dumps(r))
 
