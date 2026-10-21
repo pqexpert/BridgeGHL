@@ -16,7 +16,7 @@ def fixture():
        "status":"NO_CHANGE","checkpoint":{"verified":True},"coverage":[{"kind":"baseline","complete":True}]}
  return snapshot,ledger,full
 def evaluate(snapshot,ledger,full,state=None):
- return a.evaluate(NOW,snapshot,ledger,full,[full] if full else [],state or {"feedback":{}})
+ return a.evaluate(NOW,snapshot,ledger,full,[full] if full else [],state or {"feedback":{}},writer_active=True)
 class AlarmTests(unittest.TestCase):
  def test_healthy_empty_feedback_and_replay_silent(self):
   s,l,f=fixture();r=evaluate(s,l,f)
@@ -56,6 +56,11 @@ class AlarmTests(unittest.TestCase):
   self.assertIn("P1:distiller:verified_owner_feedback_unconsumed_24h",evaluate(s,l,f,state)["alerts"])
   state["feedback"]["id"]["classification"]="AMBIGUOUS"
   self.assertNotIn("P1:distiller:verified_owner_feedback_unconsumed_24h",evaluate(s,l,f,state)["alerts"])
+ def test_staged_writer_does_not_create_due_expectations(self):
+  s,l,f=fixture();f["observed_at"]="2026-10-19T12:00:00Z"
+  r=a.evaluate(NOW,s,l,f,[f],{"feedback":{}},writer_active=False)
+  self.assertFalse(r["comparable_coverage"])
+  self.assertFalse(any("full_readback_older" in x or "distiller:repeated_due" in x for x in r["alerts"]))
  def test_full_stale_and_unknown_cost(self):
   s,l,f=fixture();f["observed_at"]="2026-10-19T12:00:00Z"
   r=evaluate(s,l,f)

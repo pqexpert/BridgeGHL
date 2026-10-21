@@ -15,3 +15,5 @@ Operator workflow: deploy-failure-alarm.yml mode=inspect; read private /var/lib/
 Focused verification covers healthy silence/replay, truthful subset isolation, unparsed legacy evidence, explicit P0 recovery, verified owner feedback timing and FULL freshness. Existing mail tests cover exact replay, owner pin, uncertain send hold and rate limiting. The previously accepted real AgentMail receipt is reused; no synthetic owner feedback or test notification is created.
 
 Actual hosted headers FABRIC_RUN lane:YYYY-MM-DD:daily — STATUS with observed_utc are parsed with exact ET-date validation. Historical samples do not establish current-day success. Narrative effect/readback sections remain unverified rather than automatically promoted to native effect proof; this is an explicit cutover coverage gap, not a whole-actor failure.
+
+Native scheduled expectations require the actual calendar-writer activation file to say enabled=true and hosted_writer_disabled=true. A successful staged read-only FULL never activates due expectations or establishes alarm cutover readiness.
