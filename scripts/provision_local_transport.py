@@ -43,7 +43,10 @@ def remote(payload):
             if prior is None:conf.unlink()
             else:write(conf,prior,0o644)
             raise
-        command(["systemctl","reload","ssh"])
+        for service in ("sshd","ssh"):
+            if command(["systemctl","show","--property=LoadState","--value",service],text=True).stdout.strip()=="loaded":
+                command(["systemctl","reload",service]);break
+        else:raise ValueError("ssh_service_not_found")
         return {"status":"PROVISIONED","source_sha":payload["source_sha"],"listen":"127.0.0.1:18182","account":"ziji-local-link"}
     spec=importlib.util.spec_from_file_location("recovery",DEST/"local_recovery_snapshot.py")
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
