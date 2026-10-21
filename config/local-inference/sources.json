@@ -1,0 +1,49 @@
+{
+  "checked_at": "2026-10-21",
+  "controlling_issue": "https://restoration-mt.atlassian.net/browse/RBO-97",
+  "constitution": {
+    "design_id": "DAHS8QVjVng",
+    "updated_at": 1792617999,
+    "read_current_content": true,
+    "projection_note": "Current manual communication doctrine and non-harm/perfectionism guidance incorporated into bounded system prompt; no constitutional or contract amendment."
+  },
+  "github_sources": [
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/FABRIC-SOCIAL-CONTRACT.md",
+      "blob_sha": "5344bf833e9e476b7f14f0985752c37af441510c"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/SEMANTIC-GLOSSARY.md",
+      "blob_sha": "ff3c906b9b901ed7563fdf7cee2c89b4accf861f"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/CONTROL-POINT-REGISTRY.md",
+      "blob_sha": "7f2eb240f51269030fa67a7d72934ba3cb4ed2af"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/PQEXPERT-PRINCIPAL-OPERATING-GUIDE.md",
+      "blob_sha": "9bb1a24159f5a71df2bf261ec7965982f906e920"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/ZIJI-CONSTITUTIONAL-SOURCE-REGISTRY.json",
+      "blob_sha": "c3261dfbf7fb472d535cde8dbf3985c28c8af831"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/sops/OPERATIONS-GUIDE.md",
+      "blob_sha": "8a6f6218d6a95c79d07748889b00056996c03acc"
+    },
+    {
+      "repository": "pqexpert/FungibleRD-MVP",
+      "path": "docs/llmlms/KNOWLEDGE-LIFECYCLE.md",
+      "blob_sha": "82cf6b41881e0df8bac37291ca3efc4555044e7f"
+    }
+  ],
+  "scope": "Local proposal inference only; re-resolve current authority before external effects.",
+  "github_tree": "faa35b195ea92f7fdaa35bdc8acdf4516bd81151"
+}

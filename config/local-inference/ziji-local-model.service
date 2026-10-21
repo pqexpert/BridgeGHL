@@ -1,0 +1,24 @@
+[Unit]
+Description=Ziji pinned local proposal model
+After=network.target
+StartLimitIntervalSec=120
+StartLimitBurst=2
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/projects/BridgeGHL-local-inference/scripts/local_inference.py serve
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=5G
+TasksMax=64
+CPUQuota=400%
+
+[Install]
+WantedBy=default.target

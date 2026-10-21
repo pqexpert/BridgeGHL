@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "model_id": "Qwen/Qwen3-4B-GGUF",
+  "revision": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+  "filename": "Qwen3-4B-Q4_K_M.gguf",
+  "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+  "bytes": 2497280256,
+  "runtime_repository": "https://github.com/ggml-org/llama.cpp",
+  "runtime_revision": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+  "context_tokens": 4096,
+  "max_output_tokens": 512,
+  "threads": 6,
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "top_k": 20,
+  "min_p": 0,
+  "seed": 42,
+  "training_enabled": false,
+  "tools_enabled": false,
+  "mode": "local_proposal_only"
+}
