@@ -1,4 +1,5 @@
 """Provision a restricted loopback SSH link through existing deployment credentials."""
+import shutil
 import argparse, base64, hashlib, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile
 ROOT=pathlib.Path(globals().get("__file__","/opt/provision.py")).resolve().parents[1]
 DEST=pathlib.Path("/opt/ziji-fabric/local-link")
@@ -18,8 +19,12 @@ def remote(payload):
             write(DEST/name,base64.b64decode(files[name]),0o644)
         try:command(["python3","-c","from cryptography.hazmat.primitives.ciphers.aead import AESGCM"])
         except subprocess.CalledProcessError:
-            command(["apt-get","update"])
-            command(["apt-get","install","-y","python3-cryptography"])
+            if shutil.which("dnf"):
+                command(["dnf","install","-y","python3-cryptography"])
+            elif shutil.which("apt-get"):
+                command(["apt-get","update"])
+                command(["apt-get","install","-y","python3-cryptography"])
+            else:raise ValueError("python_cryptography_dependency_unavailable")
         directory=pathlib.Path("/var/lib/ziji-fabric/local-recovery/duck")
         directory.mkdir(parents=True,exist_ok=True);directory.chmod(0o700)
         command(["chown","ziji-local-link:ziji-local-link",str(directory)])
@@ -71,7 +76,7 @@ def main():
             report={"status":"FAILED","error":type(exc).__name__}
             if isinstance(exc,subprocess.CalledProcessError):
                 report["command"]=pathlib.Path(exc.cmd[0]).name;report["exit_code"]=exc.returncode
-                if pathlib.Path(exc.cmd[0]).name in {"sshd","systemctl","useradd","chown","apt-get"}:
+                if pathlib.Path(exc.cmd[0]).name in {"sshd","systemctl","useradd","chown","apt-get","dnf"}:
                     stderr=exc.stderr.decode(errors="replace") if isinstance(exc.stderr,bytes) else (exc.stderr or "")
                     report["diagnostic"]=stderr[-1200:]
             if isinstance(exc,ValueError):report["reason"]=str(exc)
