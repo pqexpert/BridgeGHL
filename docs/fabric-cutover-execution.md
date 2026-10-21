@@ -18,7 +18,7 @@ Accepted execution checklist; evidence updated 2026-10-21. Owner approved distri
 
 ## Recovery receipt
 
-[Backup run 39687826980](https://github.com/pqexpert/BridgeGHL/actions/runs/39687826980) succeeded. Private release [server-backup-39687826980-1](https://github.com/pqexpert/fabric-dispatch/releases/tag/server-backup-39687826980-1) was downloaded and decrypted: seven repository histories verified, outer archive SHA256 `a1bf1eb43a91072a7e18fb34c1be9ddbe181867c2734568861ad22ead5ff11b3`, included local capsule VERIFIED with 18 entries and the fingerprint above. This proves recovery archive integrity, not a booted replacement host or an export of provider-native datasets. Preserve the existing protected recovery key and earlier immutable releases. This documentation update follows that archive; its own source is committed to GitHub.
+[Backup run 39687826980](https://github.com/pqexpert/BridgeGHL/actions/runs/39687826980) succeeded. Private release [server-backup-39687826980-1](https://github.com/pqexpert/fabric-dispatch/releases/tag/server-backup-39687826980-1) was downloaded and decrypted: seven repository histories verified, encrypted release asset SHA256 `a1bf1eb43a91072a7e18fb34c1be9ddbe181867c2734568861ad22ead5ff11b3`, included local capsule VERIFIED with 18 entries and the fingerprint above. This proves recovery archive integrity, not a booted replacement host or an export of provider-native datasets. Preserve the existing protected recovery key and earlier immutable releases. This documentation update follows that archive; its own source is committed to GitHub.
 
 ## Continuation and bounded recovery
 
