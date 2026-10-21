@@ -38,10 +38,13 @@ def request(url, headers=None, body=None):
     except urllib.error.HTTPError as e:
         code = 'http_' + str(e.code)
         try:
-            error = json.loads(e.read(16000)).get('error')
-            if error in ('invalid_client', 'invalid_request', 'invalid_grant', 'unauthorized_client',
-                         'unsupported_grant_type', 'invalid_scope', 'shop_not_permitted', 'access_denied'):
-                code += '_' + error
+            raw = e.read(16000).decode('utf-8', errors='replace').lower()
+            for error in ('shop_not_permitted', 'invalid_client_secret', 'invalid_api_key',
+                          'invalid_client', 'invalid_request', 'invalid_grant', 'unauthorized_client',
+                          'unsupported_grant_type', 'invalid_scope', 'app_not_installed', 'access_denied'):
+                if re.search(r'(?<![a-z_])' + error + r'(?![a-z_])', raw):
+                    code += '_' + error
+                    break
         except Exception:
             pass
         raise ProbeError(code) from None
