@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["mcp_server.py", ".github/workflows/deploy-mcp.yml"]
+    paths: ["mcp_server.py", "task_contract.py", ".github/workflows/deploy-mcp.yml"]
 
 permissions:
   contents: read
@@ -35,7 +35,7 @@ jobs:
           python -m pip install 'mcp==2.2.0'
           python -m pip download --only-binary=:all: --dest mcp-wheels 'mcp==2.2.0'
           tar -czf mcp-wheels.tgz mcp-wheels
-          python -m py_compile mcp_server.py
+          python -m py_compile mcp_server.py task_contract.py
           python -c 'from mcp_server import SERVER; assert SERVER.name == "BridgeGHL governed CRM"'
       - name: Deploy isolated loopback service
         shell: bash
@@ -54,13 +54,14 @@ jobs:
           PY
           ssh-keygen -y -f ~/.ssh/bridgeghl-mcp >/dev/null
           ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          scp -i ~/.ssh/bridgeghl-mcp mcp_server.py mcp-wheels.tgz "$REMOTE_USER@$REMOTE_HOST:/tmp/"
-          ssh -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" "bash -s -- /tmp/mcp_server.py /tmp/mcp-wheels.tgz" <<'REMOTE'
+          scp -i ~/.ssh/bridgeghl-mcp mcp_server.py task_contract.py mcp-wheels.tgz "$REMOTE_USER@$REMOTE_HOST:/tmp/"
+          ssh -i ~/.ssh/bridgeghl-mcp "$REMOTE_USER@$REMOTE_HOST" "bash -s -- /tmp/mcp_server.py /tmp/task_contract.py /tmp/mcp-wheels.tgz" <<'REMOTE'
           set -euo pipefail
           source_file="$1"
-          wheel_archive="$2"
+          contract_file="$2"
+          wheel_archive="$3"
           wheel_dir=$(mktemp -d)
-          trap 'rm -rf "$wheel_dir" "$source_file" "$wheel_archive"' EXIT
+          trap 'rm -rf "$wheel_dir" "${rollback_dir:-}" "$source_file" "$contract_file" "$wheel_archive"' EXIT
           tar -xzf "$wheel_archive" -C "$wheel_dir"
           app_dir=/home/bridgeadmin/apps/BridgeGHL
           unit=/etc/systemd/system/bridgeghl-mcp.service
@@ -92,11 +93,57 @@ jobs:
           python3.11 --version
           "${privilege[@]}" python3.11 -m venv /opt/bridgeghl-mcp-py311
           "${privilege[@]}" /opt/bridgeghl-mcp-py311/bin/python -m pip install --disable-pip-version-check --no-index --find-links="$wheel_dir/mcp-wheels" 'mcp==2.2.0'
+          # Validate the exact candidate against the live backend before replacing
+          # any production artifact or restarting the service.
+          candidate_tools=$(mktemp)
+          openapi_file=$(mktemp)
+          PYTHONPATH="$(dirname "$source_file")" /opt/bridgeghl-mcp-py311/bin/python - "$candidate_tools" <<'PY'
+          import asyncio
+          import json
+          import sys
+          from mcp_server import SERVER
+
+          tools = asyncio.run(SERVER.list_tools())
+          with open(sys.argv[1], "w") as handle:
+              json.dump({"tools": [tool.model_dump(by_alias=True) for tool in tools]}, handle)
+          PY
+          curl --max-time 8 --fail --silent --show-error \
+            http://127.0.0.1:8000/openapi.json >"$openapi_file"
+          /opt/bridgeghl-mcp-py311/bin/python "$contract_file" \
+            "$candidate_tools" "$openapi_file"
+          rm -f "$candidate_tools" "$openapi_file"
+          echo "candidate_task_contract_verified=true"
+
+          rollback_dir=$(mktemp -d)
+          had_mcp=false
+          had_contract=false
+          had_unit=false
+          was_enabled=false
+          was_active=false
           if "${privilege[@]}" test -f "$app_dir/mcp_server.py"; then
-            "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$app_dir/mcp_server.py.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
+            had_mcp=true
+            "${privilege[@]}" cp -a "$app_dir/mcp_server.py" "$rollback_dir/mcp_server.py"
           fi
-          "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py"
-          "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT'
+          if "${privilege[@]}" test -f "$app_dir/task_contract.py"; then
+            had_contract=true
+            "${privilege[@]}" cp -a "$app_dir/task_contract.py" "$rollback_dir/task_contract.py"
+          fi
+          if "${privilege[@]}" test -f "$unit"; then
+            had_unit=true
+            if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
+              was_enabled=true
+            fi
+            if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
+              was_active=true
+            fi
+            "${privilege[@]}" cp -a "$unit" "$rollback_dir/bridgeghl-mcp.service"
+          fi
+
+          if (
+            set -euo pipefail
+            "${privilege[@]}" install -m 644 "$source_file" "$app_dir/mcp_server.py" || exit 1
+            "${privilege[@]}" install -m 644 "$contract_file" "$app_dir/task_contract.py" || exit 1
+            "${privilege[@]}" tee "$unit" >/dev/null <<'UNIT' || exit 1
           [Unit]
           Description=BridgeGHL governed MCP adapter (loopback only)
           After=network-online.target bridgeghl.service
@@ -118,37 +165,27 @@ jobs:
           [Install]
           WantedBy=multi-user.target
           UNIT
-          "${privilege[@]}" systemctl daemon-reload
-          "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service
-          "${privilege[@]}" systemctl restart bridgeghl-mcp.service
-          "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service
-          # Bound the probe; GET /mcp is a streaming endpoint and must not be used here.
-          for attempt in {1..12}; do
-            if response=$(curl --max-time 8 --fail --silent --show-error \
-              --header 'Content-Type: application/json' \
-              --header 'Accept: application/json, text/event-stream' \
-              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
-              http://127.0.0.1:8001/mcp) && \
-              printf '%s' "$response" | python3 -c 'import json,sys; assert json.load(sys.stdin)["result"]["serverInfo"]["name"] == "BridgeGHL governed CRM"'; then
-              health=$(curl --max-time 15 --fail --silent --show-error \
+            "${privilege[@]}" systemctl daemon-reload || exit 1
+            "${privilege[@]}" systemctl enable --now bridgeghl-mcp.service || exit 1
+            "${privilege[@]}" systemctl restart bridgeghl-mcp.service || exit 1
+            "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || exit 1
+
+            active_verified=false
+            for attempt in {1..12}; do
+              if response=$(curl --max-time 8 --fail --silent --show-error \
                 --header 'Content-Type: application/json' \
                 --header 'Accept: application/json, text/event-stream' \
-                --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridge_health","arguments":{}}}' \
-                http://127.0.0.1:8001/mcp)
-              printf '%s' "$health" | python3 -c '
-          import json, sys
-          def healthy(v):
-              if isinstance(v, dict):
-                  return v.get("state") == "HEALTHY" or any(healthy(item) for item in v.values())
-              if isinstance(v, list):
-                  return any(healthy(item) for item in v)
-              if isinstance(v, str) and v.startswith("{"):
-                  try: return healthy(json.loads(v))
-                  except ValueError: return False
-              return False
-          assert healthy(json.load(sys.stdin))
-          '
-              printf '%s' "$health" | python3 -c '
+                --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
+                http://127.0.0.1:8001/mcp) && \
+                printf '%s' "$response" | python3 -c 'import json,sys; assert json.load(sys.stdin)["result"]["serverInfo"]["name"] == "BridgeGHL governed CRM"'; then
+                tools_file=$(mktemp)
+                live_openapi=$(mktemp)
+                if health=$(curl --max-time 15 --fail --silent --show-error \
+                  --header 'Content-Type: application/json' \
+                  --header 'Accept: application/json, text/event-stream' \
+                  --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridge_health","arguments":{}}}' \
+                  http://127.0.0.1:8001/mcp) && \
+                  printf '%s' "$health" | python3 -c '
           import json, sys
           def payload(v):
               if isinstance(v, dict):
@@ -165,21 +202,81 @@ jobs:
                   except ValueError: return None
               return None
           result = payload(json.load(sys.stdin))
+          assert result["state"] == "HEALTHY"
           assert result["plugin_contract"]["version"] == "rsc-command-center-plugin/v1"
           assert result["task_writes_enabled"] is True
-          '
-              curl --max-time 8 --fail --silent --show-error \
-                --header 'Content-Type: application/json' \
-                --header 'Accept: application/json, text/event-stream' \
-                --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' \
-                http://127.0.0.1:8001/mcp | python3 -c 'import json,sys; names={t["name"] for t in json.load(sys.stdin)["result"]["tools"]}; required={"read_journey_evidence","dry_run_task_create","execute_task_create","dry_run_task_delete","execute_task_delete"}; assert required <= names, required - names'
-              echo "journey_evidence_and_task_tools_discovered=true"
-              echo "loopback_mcp_health_verified=true"
-              exit 0
+          ' && \
+                  curl --max-time 8 --fail --silent --show-error \
+                    --header 'Content-Type: application/json' \
+                    --header 'Accept: application/json, text/event-stream' \
+                    --data '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' \
+                    http://127.0.0.1:8001/mcp >"$tools_file" && \
+                  curl --max-time 8 --fail --silent --show-error \
+                    http://127.0.0.1:8000/openapi.json >"$live_openapi" && \
+                  /opt/bridgeghl-mcp-py311/bin/python "$app_dir/task_contract.py" \
+                    "$tools_file" "$live_openapi"; then
+                  rm -f "$tools_file" "$live_openapi"
+                  active_verified=true
+                  break
+                fi
+                rm -f "$tools_file" "$live_openapi"
+              fi
+              sleep 1
+            done
+            [[ "$active_verified" == true ]]
+          ); then
+            echo "journey_evidence_and_task_tools_discovered=true"
+            echo "loopback_mcp_health_verified=true"
+            echo "deployment_effect_verified=true"
+          else
+            set +e
+            rollback_ok=true
+            if [[ "$had_mcp" == true ]]; then
+              "${privilege[@]}" install -m 644 "$rollback_dir/mcp_server.py" "$app_dir/mcp_server.py" || rollback_ok=false
+            else
+              "${privilege[@]}" rm -f "$app_dir/mcp_server.py" || rollback_ok=false
             fi
-            sleep 1
-          done
-          exit 1
+            if [[ "$had_contract" == true ]]; then
+              "${privilege[@]}" install -m 644 "$rollback_dir/task_contract.py" "$app_dir/task_contract.py" || rollback_ok=false
+            else
+              "${privilege[@]}" rm -f "$app_dir/task_contract.py" || rollback_ok=false
+            fi
+            if [[ "$had_unit" == true ]]; then
+              "${privilege[@]}" install -m 644 "$rollback_dir/bridgeghl-mcp.service" "$unit" || rollback_ok=false
+              "${privilege[@]}" systemctl daemon-reload || rollback_ok=false
+              if [[ "$was_enabled" == true ]]; then
+                "${privilege[@]}" systemctl enable bridgeghl-mcp.service || rollback_ok=false
+                "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service || rollback_ok=false
+              else
+                "${privilege[@]}" systemctl disable bridgeghl-mcp.service || rollback_ok=false
+                if "${privilege[@]}" systemctl is-enabled --quiet bridgeghl-mcp.service; then
+                  rollback_ok=false
+                fi
+              fi
+              if [[ "$was_active" == true ]]; then
+                "${privilege[@]}" systemctl restart bridgeghl-mcp.service || rollback_ok=false
+                "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service || rollback_ok=false
+              else
+                "${privilege[@]}" systemctl stop bridgeghl-mcp.service || rollback_ok=false
+                if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
+                  rollback_ok=false
+                fi
+              fi
+            else
+              "${privilege[@]}" systemctl disable --now bridgeghl-mcp.service || true
+              "${privilege[@]}" rm -f "$unit" || rollback_ok=false
+              "${privilege[@]}" systemctl daemon-reload || rollback_ok=false
+              if "${privilege[@]}" systemctl is-active --quiet bridgeghl-mcp.service; then
+                rollback_ok=false
+              fi
+            fi
+            if [[ "$rollback_ok" == true ]]; then
+              echo "deployment_rolled_back=true"
+            else
+              echo "deployment_rollback_failed=true" >&2
+            fi
+            exit 1
+          fi
           REMOTE
       - name: Remove SSH material
         if: always()
