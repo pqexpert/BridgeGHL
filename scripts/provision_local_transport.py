@@ -69,7 +69,7 @@ def main():
         return
     host=os.environ["REMOTE_HOST"];user=os.environ["REMOTE_USER"]
     if not re.fullmatch(r"[A-Za-z0-9.-]+",host) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*",user):raise ValueError("target")
-    key=os.environ["SSH_PRIVATE_KEY"].strip()
+    key=os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n","\n")
     if not key.startswith("-----BEGIN"):key=base64.b64decode(key).decode()
     files={name:base64.b64encode((ROOT/"scripts"/name).read_bytes()).decode() for name in ("local_recovery_snapshot.py","local_inference_transport.py")}
     files["public_key"]=(ROOT/"config/local-transport/duck.pub").read_text()
@@ -80,7 +80,7 @@ def main():
         write(d/"known_hosts",(host+" "+pin+"\n").encode())
         code=base64.b64encode(pathlib.Path(__file__).read_bytes()).decode()
         # The base64 alphabet has no shell metacharacters; double quotes preserve its literal.
-        remote_cmd='sudo -n python3 -c "import base64;exec(compile(base64.b64decode(\''+code+'\'),\'/opt/provision.py\',\'exec\')))" --remote'
+        remote_cmd='sudo -n python3 -c "import base64;exec(compile(base64.b64decode(\''+code+'\'),\'/opt/provision.py\',\'exec\'))" --remote'
         result=subprocess.run(["ssh","-i",str(d/"key"),"-o","IdentitiesOnly=yes","-o","BatchMode=yes","-o","ConnectTimeout=15","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(d/"known_hosts"),user+"@"+host,remote_cmd],input=json.dumps(payload),text=True,capture_output=True,timeout=480)
         for line in result.stdout.splitlines():
             if line.startswith("{"):print(line)
