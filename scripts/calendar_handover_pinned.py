@@ -2,6 +2,7 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -22,17 +23,28 @@ def stamp(value):
 def split_description(value):
     if not isinstance(value, str):
         raise ValueError("description_missing")
-    # END contains START: count complete marker lines, preserving all original bytes.
-    lines = value.splitlines(keepends=True)
-    markers = [(i, line.strip()) for i, line in enumerate(lines)
-               if line.strip() in {START, END, HUMAN}]
-    if [kind for _, kind in markers] != [START, END, HUMAN]:
+    # Calendar descriptions may wrap markers in HTML or Markdown. Match unique
+    # literal tokens without stripping or rewriting any source characters.
+    if value.count(START) != 2 or value.count(END) != 1 or value.count(HUMAN) != 1:
         raise ValueError("ambiguous_description_markers")
-    first, end, human = [i for i, _ in markers]
-    if first != 0 or end >= human:
+    first, end, human = value.index(START), value.index(END), value.index(HUMAN)
+    if not first < end < human:
         raise ValueError("ambiguous_description_boundaries")
-    # Everything after END belongs to the preserved human suffix.
-    return "".join(lines[:end + 1]), "".join(lines[end + 1:])
+    boundary = end + len(END)
+    return value[:boundary], value[boundary:]
+
+class VisibleResponse(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts=[]
+    def handle_data(self,data):
+        self.parts.append(data)
+
+def response_has_text(value):
+    parser=VisibleResponse()
+    parser.feed(value)
+    parser.close()
+    return bool("".join(parser.parts).strip())
 
 def protected(event):
     return {k: v for k, v in event.items() if k not in VOLATILE}
@@ -103,7 +115,7 @@ def compare(current, previous, binding, ledger, now):
         normalized_digest = digest(suffix.strip())
         # Blank response marker alone is not owner feedback.
         response = suffix.split(HUMAN, 1)[1]
-        if response.strip():
+        if response_has_text(response):
             key = "calendar-feedback:" + binding["calendar_id"] + ":" + eid + ":" + normalized_digest
             if key not in receipts:
                 receipts[key] = {"event_id":eid,"event_time":event.get("start"),
