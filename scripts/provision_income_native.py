@@ -8,7 +8,7 @@ import subprocess
 
 PIN = "f6c2df8e0ca0e49b676766bf96e433ff5c05f3da"
 
-def server(payload):
+def _server(payload):
     import sys
     import fcntl
     if os.geteuid()!=0:raise ValueError("root_required")
@@ -40,6 +40,16 @@ def server(payload):
         "native_receipt_readback":receipt.get("native_readback",False),"jira_comment_id":receipt.get("comment_id"),
         "canonical_writeback":report.get("canonical_writeback","PENDING_HOSTED_BRIDGE"),
         "submitted":0,"contacted":0,"schedule_changed":False}
+
+def server(payload):
+    try:
+        return _server(payload)
+    except Exception as exc:
+        code = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,100}", code):
+            code = type(exc).__name__
+        return {"stage":"INCOME_NATIVE_UNIT", "outcome":"FAIL", "error_code":code,
+                "private_details_withheld":True, "submitted":0, "contacted":0}
 
 def deploy():
     user,host=os.environ["REMOTE_USER"],os.environ["REMOTE_HOST"]
