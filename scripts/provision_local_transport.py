@@ -65,7 +65,14 @@ def main():
     if args.remote:
         try:print(json.dumps(remote(json.load(sys.stdin)),sort_keys=True))
         except Exception as exc:
-            print(json.dumps({"status":"FAILED","error":type(exc).__name__}));sys.exit(1)
+            report={"status":"FAILED","error":type(exc).__name__}
+            if isinstance(exc,subprocess.CalledProcessError):
+                report["command"]=pathlib.Path(exc.cmd[0]).name;report["exit_code"]=exc.returncode
+                if pathlib.Path(exc.cmd[0]).name in {"sshd","systemctl","useradd","chown","apt-get"}:
+                    stderr=exc.stderr.decode(errors="replace") if isinstance(exc.stderr,bytes) else (exc.stderr or "")
+                    report["diagnostic"]=stderr[-1200:]
+            if isinstance(exc,ValueError):report["reason"]=str(exc)
+            print(json.dumps(report));sys.exit(1)
         return
     host=os.environ["REMOTE_HOST"];user=os.environ["REMOTE_USER"]
     if not re.fullmatch(r"[A-Za-z0-9.-]+",host) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*",user):raise ValueError("target")
