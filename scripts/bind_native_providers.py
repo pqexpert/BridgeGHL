@@ -26,16 +26,25 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 def request(url, headers=None, body=None):
-    data = json.dumps(body).encode() if body is not None else None
+    form = url.endswith('/admin/oauth/access_token')
+    data = (urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()) if body is not None else None
     h = {'Accept': 'application/json', **(headers or {})}
     if data is not None:
-        h['Content-Type'] = 'application/json'
+        h['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
     req = urllib.request.Request(url, headers=h, data=data)
     try:
         with urllib.request.build_opener(NoRedirect).open(req, timeout=25) as r:
             return json.loads(r.read(2000000))
     except urllib.error.HTTPError as e:
-        raise ProbeError('http_' + str(e.code)) from None
+        code = 'http_' + str(e.code)
+        try:
+            error = json.loads(e.read(16000)).get('error')
+            if error in ('invalid_client', 'invalid_request', 'invalid_grant', 'unauthorized_client',
+                         'unsupported_grant_type', 'invalid_scope', 'shop_not_permitted', 'access_denied'):
+                code += '_' + error
+        except Exception:
+            pass
+        raise ProbeError(code) from None
     except Exception:
         raise ProbeError('network_or_response_error') from None
 
@@ -50,7 +59,8 @@ def jira(config, call=request):
     auth = base64.b64encode((config['JIRA_EMAIL'] + ':' + config['JIRA_API_TOKEN']).encode()).decode()
     headers = {'Authorization': 'Basic ' + auth}
     identity = call(JIRA_ROOT + '/rest/api/3/myself', headers)
-    if not identity.get('active') or identity.get('accountId') != '712020:957ef1d2-89f5-461a-90e3-ffcfb77330bd':
+    if (not identity.get('active') or not identity.get('accountId') or
+        (identity.get('emailAddress') and identity['emailAddress'].lower() != config['JIRA_EMAIL'].lower())):
         raise ProbeError('jira_identity_mismatch')
     issue = call(JIRA_ROOT + '/rest/api/3/issue/RBO-97?fields=project', headers)
     if issue.get('key') != 'RBO-97' or issue.get('fields', {}).get('project', {}).get('key') != 'RBO':
