@@ -2,6 +2,7 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,19 @@ def split_description(value):
         raise ValueError("ambiguous_description_boundaries")
     boundary = end + len(END)
     return value[:boundary], value[boundary:]
+
+class VisibleResponse(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts=[]
+    def handle_data(self,data):
+        self.parts.append(data)
+
+def response_has_text(value):
+    parser=VisibleResponse()
+    parser.feed(value)
+    parser.close()
+    return bool("".join(parser.parts).strip())
 
 def protected(event):
     return {k: v for k, v in event.items() if k not in VOLATILE}
@@ -101,7 +115,7 @@ def compare(current, previous, binding, ledger, now):
         normalized_digest = digest(suffix.strip())
         # Blank response marker alone is not owner feedback.
         response = suffix.split(HUMAN, 1)[1]
-        if response.strip():
+        if response_has_text(response):
             key = "calendar-feedback:" + binding["calendar_id"] + ":" + eid + ":" + normalized_digest
             if key not in receipts:
                 receipts[key] = {"event_id":eid,"event_time":event.get("start"),
