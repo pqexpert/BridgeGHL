@@ -10,7 +10,7 @@ def headers():
     if cfg.get("base_url")!=JIRA_ROOT or cfg.get("project_allowlist")!=["RBO"]:raise ProbeError("jira_scope")
     return {"Authorization":"Basic "+base64.b64encode((cfg["email"]+":"+cfg["api_token"]).encode()).decode()}
 def matches(body,key):
-    return bool(re.search(r"(?<![A-Za-z0-9_:-])"+re.escape(key)+r"(?![A-Za-z0-9_:-])",body))
+    return bool(re.search(r"(?<![A-Za-z0-9_:/.-])"+re.escape(key)+r"(?![A-Za-z0-9_:/.-])",body))
 def lookup(issue,key,h,call):
     # One full index on first use; later searches fetch only comments newer than
     # the known first page. This is private server evidence, never a public log.
@@ -39,7 +39,7 @@ def readback(issue,cid,key,h,call):
     if str(value.get("id"))!=cid or not matches(text_content(value.get("body",{})),key):raise ProbeError("jira_readback")
     return True
 def publish(issue,replay_id,receipt,call=request):
-    if issue not in ISSUES or not re.fullmatch(r"[a-z0-9][A-Za-z0-9_:.-]{1,239}",replay_id):raise ProbeError("receipt_scope")
+    if issue not in ISSUES or not re.fullmatch(r"[a-z0-9][A-Za-z0-9_:/.-]{1,239}",replay_id):raise ProbeError("receipt_scope")
     if not isinstance(receipt,dict) or receipt.get("lane") not in {"income","rsc","store","distiller","dispatch"}:raise ProbeError("receipt_lane")
     if receipt.get("outcome") not in {"SUCCESS","NO_CHANGE","BLOCKED","FAIL"}:raise ProbeError("receipt_outcome")
     if len(json.dumps(receipt))>20000:raise ProbeError("receipt_size")
