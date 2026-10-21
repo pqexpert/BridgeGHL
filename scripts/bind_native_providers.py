@@ -26,10 +26,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 def request(url, headers=None, body=None):
-    data = json.dumps(body).encode() if body is not None else None
+    form = url.endswith('/admin/oauth/access_token')
+    data = (urllib.parse.urlencode(body).encode() if form else json.dumps(body).encode()) if body is not None else None
     h = {'Accept': 'application/json', **(headers or {})}
     if data is not None:
-        h['Content-Type'] = 'application/json'
+        h['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
     req = urllib.request.Request(url, headers=h, data=data)
     try:
         with urllib.request.build_opener(NoRedirect).open(req, timeout=25) as r:
