@@ -22,6 +22,7 @@ ALLOWED = {
     "state/codex-binding.json", "state/api-key", "state/transport.json",
     "launchers/ziji-local", "launchers/ziji-codex",
     "services/ziji-local-model.service", "services/ziji-local-tunnel.service",
+    "services/ziji-local-recovery.service", "services/ziji-local-recovery.timer",
     "config/model-lock.json", "config/system.txt", "config/sources.json",
     "source/local_inference.py", "source/local_codex.py",
     "source/local_inference_transport.py", "source/local_recovery_snapshot.py",
@@ -41,12 +42,15 @@ def sources(home, inference_root):
         result["state/" + name] = state / name
     for name in ("ziji-local", "ziji-codex"):
         result["launchers/" + name] = home / ".local/bin" / name
-    for name in ("ziji-local-model.service", "ziji-local-tunnel.service"):
+    for name in ("ziji-local-model.service", "ziji-local-tunnel.service", "ziji-local-recovery.service", "ziji-local-recovery.timer"):
         result["services/" + name] = home / ".config/systemd/user" / name
     for name in ("model-lock.json", "system.txt", "sources.json"):
         result["config/" + name] = inference_root / "config/local-inference" / name
     for name in ("local_inference.py", "local_codex.py", "local_inference_transport.py"):
         result["source/" + name] = inference_root / "scripts" / name
+    transport_source = inference_root.parent / "BridgeGHL-local-transport/scripts/local_inference_transport.py"
+    if transport_source.exists():
+        result["source/local_inference_transport.py"] = transport_source
     result["source/local_recovery_snapshot.py"] = Path(__file__).resolve()
     return result
 
