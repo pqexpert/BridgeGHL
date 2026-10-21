@@ -13,7 +13,7 @@ import sys
 import tempfile
 import urllib.parse
 
-from bind_native_providers import request, jira, ProbeError
+from bind_native_providers import request, required, JIRA_ROOT, ProbeError
 
 ROOT = Path('/opt/ziji-fabric/native')
 STATE = Path('/var/lib/ziji-fabric/native-sources')
@@ -49,8 +49,17 @@ def text_content(node):
 
 def jira_snapshot(cfg, call=request):
     import base64
-    jira({'JIRA_EMAIL':cfg['email'], 'JIRA_API_TOKEN':cfg['api_token']}, call)
+    # Binding installation audits project permissions. Each collection still
+    # verifies the active identity, but does not repeat unused write probes.
+    required(cfg, ('email', 'api_token'))
+    if cfg.get('base_url') != JIRA_ROOT or cfg.get('project_allowlist') != ['RBO']:
+        raise ProbeError('jira_binding_scope_mismatch')
     headers = {'Authorization':'Basic ' + base64.b64encode((cfg['email']+':'+cfg['api_token']).encode()).decode()}
+    identity = call(JIRA_ROOT + '/rest/api/3/myself', headers)
+    if (not identity.get('active') or not identity.get('accountId') or
+        not isinstance(identity.get('emailAddress'), str) or
+        identity['emailAddress'].lower() != cfg['email'].lower()):
+        raise ProbeError('jira_identity_mismatch')
     comments, start = [], 0
     for _ in range(100):
         page = call(cfg['base_url'] + '/rest/api/3/issue/RBO-97/comment?' + urllib.parse.urlencode(

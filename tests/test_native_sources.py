@@ -12,14 +12,13 @@ import collect_native_sources as m
 
 class NativeSources(unittest.TestCase):
     def test_jira_complete_pagination_and_no_execution_inference(self):
-        cfg={'email':'owner@example.com','api_token':'secret','base_url':'https://example.invalid'}
+        cfg={'email':'owner@example.com','api_token':'secret','base_url':m.JIRA_ROOT,'project_allowlist':['RBO']}
+        calls=[]
         def call(url,*a,**kw):
+            calls.append(url)
             if '/myself' in url:
                 return {'active':True,'accountId':'id','emailAddress':cfg['email']}
-            if '/mypermissions' in url:
-                return {'permissions':{}}
-            if '/comment?' not in url:
-                return {'key':'RBO-97','fields':{'project':{'key':'RBO'}}}
+            self.assertIn('/comment?',url)
             start=1 if 'startAt=1' in url else 0
             return {'startAt':start,'total':2,'comments':[{'id':str(start),'created':'date','updated':'date',
               'body':{'content':[{'text':'FABRIC_FINDING evidence'}]}}]}
@@ -27,6 +26,21 @@ class NativeSources(unittest.TestCase):
         self.assertEqual(result['comments_scanned'],2)
         self.assertEqual(len(result['receipt_candidates']),2)
         self.assertFalse(result['actor_execution_verified'])
+        self.assertEqual(len(calls),3)  # identity plus two comment pages
+
+    def test_jira_scope_and_identity_fail_before_comments(self):
+        cfg={'email':'owner@example.com','api_token':'secret','base_url':m.JIRA_ROOT,'project_allowlist':['RBO']}
+        from unittest.mock import Mock
+        for change in ({'base_url':'https://example.invalid'}, {'project_allowlist':['OTHER']}):
+            call=Mock()
+            with self.assertRaisesRegex(m.ProbeError,'jira_binding_scope_mismatch'):
+                m.jira_snapshot(dict(cfg,**change),call)
+            call.assert_not_called()
+        call=Mock(return_value={'active':True,'accountId':'id','emailAddress':'other@example.com'})
+        with self.assertRaisesRegex(m.ProbeError,'jira_identity_mismatch'):
+            m.jira_snapshot(cfg,call)
+        call.assert_called_once()
+
 
     def test_calendar_preserves_description_and_excludes_shared_events(self):
         description='FABRIC CURRENT NOTE\nold note\nEND FABRIC CURRENT NOTE\n Human response:  keep spaces  '
