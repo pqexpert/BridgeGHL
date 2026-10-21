@@ -34,9 +34,10 @@ def lookup(issue,key,h,call):
     found=[cid for cid,body in cached.items() if matches(body,key)]
     if len(found)>1:raise ProbeError("duplicate_existing_receipts")
     return found[0] if found else None
-def readback(issue,cid,key,h,call):
+def readback(issue,cid,key,h,call,receipt):
     value=call(JIRA_ROOT+"/rest/api/3/issue/"+issue+"/comment/"+cid,h)
     if str(value.get("id"))!=cid or not matches(text_content(value.get("body",{})),key):raise ProbeError("jira_readback")
+    if json.dumps(receipt,sort_keys=True) not in text_content(value.get("body",{})):raise ProbeError("jira_receipt_content_mismatch")
     return True
 def publish(issue,replay_id,receipt,call=request):
     if issue not in ISSUES or not re.fullmatch(r"[a-z0-9][A-Za-z0-9_:/.-]{1,239}",replay_id):raise ProbeError("receipt_scope")
@@ -55,7 +56,7 @@ def _publish(issue,key,receipt,call):
     cid=lookup(issue,key,h,call)
     base={"issue":issue,"replay_id":key,"request_hash":fingerprint,"receipt":receipt,"observed_at":dt.datetime.now(dt.timezone.utc).isoformat()}
     if cid:
-        readback(issue,cid,key,h,call)
+        readback(issue,cid,key,h,call,receipt)
         result=dict(base,status="EXISTING",comment_id=cid,native_readback=True)
     elif prior:
         # PENDING is written before POST. An absent provider readback following
@@ -67,7 +68,7 @@ def _publish(issue,key,receipt,call):
         body={"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":("FABRIC_HANDOFF " if receipt.get("action_class")=="merge_handoff" else "FABRIC_RUN " if key.endswith(":daily") else "FABRIC_FINDING ")+key+"\n"+json.dumps(receipt,sort_keys=True)}]}]}}
         try:
             response=call(JIRA_ROOT+"/rest/api/3/issue/"+issue+"/comment",h,body)
-            cid=str(response["id"]);readback(issue,cid,key,h,call)
+            cid=str(response["id"]);readback(issue,cid,key,h,call,receipt)
             result.update(status="VERIFIED",comment_id=cid,native_readback=True)
         except Exception:
             result.update(status="UNKNOWN",native_readback=False)
