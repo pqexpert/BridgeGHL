@@ -2,7 +2,7 @@
 import shutil
 import argparse, base64, hashlib, importlib.util, json, os, pathlib, re, subprocess, sys, tempfile
 ROOT=pathlib.Path(globals().get("__file__","/opt/provision.py")).resolve().parents[1]
-DEST=pathlib.Path("/opt/ziji-fabric/local-link")
+DEST=pathlib.Path("/usr/local/lib/ziji-local-link")
 def command(argv, **kw):
     return subprocess.run(argv,check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**kw)
 def write(path,data,mode=0o600):
@@ -28,11 +28,18 @@ def remote(payload):
         directory=pathlib.Path("/var/lib/ziji-fabric/local-recovery/duck")
         directory.mkdir(parents=True,exist_ok=True);directory.chmod(0o700)
         command(["chown","ziji-local-link:ziji-local-link",str(directory)])
+        if not shutil.which("setfacl"):
+            manager="dnf" if shutil.which("dnf") else "apt-get"
+            command([manager,"install","-y","acl"])
+        for ancestor in (directory.parent.parent,directory.parent):
+            command(["setfacl","-m","u:ziji-local-link:--x",str(ancestor)])
+        command(["runuser","-u","ziji-local-link","--","test","-r",str(DEST/"local_recovery_snapshot.py")])
+        command(["runuser","-u","ziji-local-link","--","test","-w",str(directory)])
         pub=files["public_key"].strip()
         if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [A-Za-z0-9_-]+)?",pub):raise ValueError("public_key")
         home=pathlib.Path("/home/ziji-local-link/.ssh")
         home.mkdir(mode=0o700,exist_ok=True);home.chmod(0o700)
-        options='restrict,port-forwarding,permitlisten="127.0.0.1:18182",command="/usr/bin/python3 /opt/ziji-fabric/local-link/local_recovery_snapshot.py --receive"'
+        options='restrict,port-forwarding,permitlisten="127.0.0.1:18182",command="/usr/bin/python3 /usr/local/lib/ziji-local-link/local_recovery_snapshot.py --receive"'
         write(home/"authorized_keys",(options+" "+pub+"\n").encode())
         command(["chown","-R","ziji-local-link:ziji-local-link",str(home)])
         conf=pathlib.Path("/etc/ssh/sshd_config.d/60-ziji-local-link.conf")
