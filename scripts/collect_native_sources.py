@@ -105,7 +105,7 @@ def calendar_snapshot(cfg, now, call=request):
         params['pageToken'] = nxt
     raise ProbeError('calendar_pagination_limit')
 
-def collect(trigger='cron'):
+def collect(trigger='manual'):
     if STATE.is_symlink():
         raise ProbeError('state_path_symlink')
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -116,8 +116,13 @@ def collect(trigger='cron'):
         report = {'stage':'NATIVE_SOURCE_COLLECTION', 'observed_at':now.isoformat(),
                   'trigger':trigger, 'model_calls':0, 'calendar_writes':0, 'external_messages':0, 'actor_execution_verified':False}
         if (STATE/'latest.json').exists():
-            prior = json.loads((STATE/'latest.json').read_text())
-            report['previous_collection'] = {k:prior.get(k) for k in ('observed_at','trigger')}
+            try:
+                prior = json.loads((STATE/'latest.json').read_text())
+                if not isinstance(prior, dict):
+                    raise ValueError('prior_not_object')
+                report['previous_collection'] = {k:prior.get(k) for k in ('observed_at','trigger')}
+            except (ValueError, OSError):
+                report['previous_collection'] = {'status':'unreadable_prior_metadata'}
         for lane, fn in (('jira',lambda: jira_snapshot(config('jira'))),
                          ('calendar',lambda: calendar_snapshot(config('google'),now))):
             try:
@@ -144,8 +149,9 @@ def install(source, binding_source):
         raise ProbeError('installation_boundary_invalid')
     ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
     ROOT.chmod(0o700)
-    cron = '# Native read-only evidence; no model or provider writes.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py >/dev/null 2>&1\n'
-    if CRON.exists() and CRON.read_text() != cron:
+    cron = '# Native read-only evidence; no model or provider writes.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
+    legacy_cron = cron.replace(' --trigger cron', '')
+    if CRON.exists() and CRON.read_text() not in (cron, legacy_cron):
         raise ProbeError('existing_cron_conflict_preserved')
     atomic(ROOT/'bind_native_providers.py',binding_source)
     atomic(ROOT/'collect_native_sources.py',source)
@@ -159,7 +165,10 @@ def install(source, binding_source):
 
 if __name__ == '__main__':
     try:
-        print(json.dumps(collect(),sort_keys=True))
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--trigger', choices=('manual','cron'), default='manual')
+        print(json.dumps(collect(parser.parse_args().trigger),sort_keys=True))
     except Exception:
         print('{"stage":"NATIVE_SOURCE_COLLECTION","status":"failed_details_withheld"}')
         sys.exit(1)

@@ -43,7 +43,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/bridgeghl-capacity >/dev/null
           ssh-keyscan -T 10 -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           ssh -i ~/.ssh/bridgeghl-capacity -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -uo pipefail
           python3 - <<'PY'
           import json, os, shutil, subprocess, sys, platform
           from pathlib import Path
@@ -88,6 +88,64 @@ jobs:
           if alerts:
               raise SystemExit(1)
           PY
+          capacity_status=$?
+          sudo -n python3 - <<'PY_NATIVE'
+          import datetime as dt, hashlib, json, fcntl, os
+          from pathlib import Path
+          root = Path('/var/lib/ziji-fabric/native-sources')
+          report = {'stage':'NATIVE_MIGRATION_READBACK', 'model_calls':0, 'calendar_writes':0}
+          def read(name):
+              path = root / name
+              if path.is_symlink() or path.stat().st_uid != 0 or path.stat().st_mode & 0o077:
+                  raise ValueError('unsafe_state')
+              return json.loads(path.read_text())
+          def age(value):
+              stamp = dt.datetime.fromisoformat(value.replace('Z','+00:00'))
+              if stamp.tzinfo is None:
+                  raise ValueError('missing_timezone')
+              return round((dt.datetime.now(dt.timezone.utc)-stamp).total_seconds())
+          try:
+              lockfd = os.open(root/'run.lock', os.O_RDONLY | os.O_NOFOLLOW)
+              lock = os.fdopen(lockfd, 'r')
+              fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+              latest = read('latest.json')
+              report['collection_age_seconds'] = age(latest['observed_at'])
+              report['cron_trigger_recorded'] = latest.get('trigger') == 'cron'
+              report['collection_fresh'] = 0 <= report['collection_age_seconds'] <= 4500
+              for lane in ('jira','calendar'):
+                  status = latest.get(lane,{})
+                  snapshot = read(lane+'.json')
+                  raw = (root/(lane+'.json')).read_bytes()
+                  report[lane] = {
+                      'retrieved':status.get('status') == 'retrieved_and_persisted',
+                      'digest_matches':hashlib.sha256(raw).hexdigest() == status.get('snapshot_sha256'),
+                      'snapshot_age_seconds':age(snapshot['observed_at']),
+                      'items':len(snapshot.get('receipt_candidates',snapshot.get('events',[])))}
+              current = read('calendar.json')
+              prior = read('calendar-previous.json')
+              old = {e['id']:e for e in prior['events']}
+              common = [(e,old[e['id']]) for e in current['events'] if e['id'] in old]
+              marker = 'END FABRIC CURRENT NOTE'
+              suffix_pairs = [(a['description'].split(marker,1)[1],b['description'].split(marker,1)[1])
+                              for a,b in common if a.get('description','').count(marker)==1 and b.get('description','').count(marker)==1]
+              report['calendar_comparison'] = {
+                  'prior_age_seconds':age(prior['observed_at']),
+                  'common_events':len(common), 'comparable_suffixes':len(suffix_pairs),
+                  'unchanged_suffixes':sum(a==b for a,b in suffix_pairs),
+                  'recurring_events':sum(bool(e.get('recurringEventId')) for e in current['events']),
+                  'writer_allowlist_established':False, 'historical_feedback_consumed':False}
+              passed = report['collection_fresh'] and all(
+                  report[lane]['retrieved'] and report[lane]['digest_matches']
+                  and 0 <= report[lane]['snapshot_age_seconds'] <= 4500
+                  for lane in ('jira','calendar'))
+              report['inspection'] = 'verified' if passed else 'failed'
+          except Exception:
+              report['inspection'] = 'incomplete_details_withheld'
+          print(json.dumps(report,sort_keys=True))
+          raise SystemExit(0 if report['inspection'] == 'verified' else 1)
+          PY_NATIVE
+          native_status=$?
+          if [ "$capacity_status" -ne 0 ] || [ "$native_status" -ne 0 ]; then exit 1; fi
           REMOTE
       - name: Remove SSH material
         if: always()

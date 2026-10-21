@@ -3,6 +3,9 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
+import tempfile
+import json
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'scripts'))
 import collect_native_sources as m
@@ -41,6 +44,58 @@ class NativeSources(unittest.TestCase):
         self.assertEqual(r['events'][0]['description'],description)
         self.assertFalse(r['writer_allowlist_established'])
         self.assertEqual(r['calendar_writes'],0)
+
+    def test_invalid_prior_metadata_does_not_block_either_lane(self):
+        for previous in ('{broken', '[]', 'null'):
+            with self.subTest(previous=previous), tempfile.TemporaryDirectory() as d:
+                root=Path(d)
+                (root/'latest.json').write_text(previous)
+                with patch.object(m,'STATE',root), patch.object(m,'config',return_value={}), patch.object(m,'jira_snapshot',return_value={'receipt_candidates':[],'comments_scanned':0}) as jira, patch.object(m,'calendar_snapshot',return_value={'events':[],'events_scanned':0}) as calendar:
+                    result=m.collect()
+                self.assertEqual(result['trigger'],'manual')
+                self.assertEqual(result['previous_collection']['status'],'unreadable_prior_metadata')
+                self.assertEqual(result['jira']['status'],'retrieved_and_persisted')
+                self.assertEqual(result['calendar']['status'],'retrieved_and_persisted')
+                self.assertEqual(json.loads((root/'latest.json').read_text()),result)
+                jira.assert_called_once()
+                calendar.assert_called_once()
+
+    def test_install_migrates_only_known_cron_and_labels_validation(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            cron=root/'cron'
+            cron.write_text('# Native read-only evidence; no model or provider writes.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py >/dev/null 2>&1\n')
+            ready={'jira':{'status':'retrieved_and_persisted'},'calendar':{'status':'retrieved_and_persisted'}}
+            with patch.object(m,'ROOT',root/'source'), patch.object(m,'CRON',cron), patch.object(m.os,'geteuid',return_value=0), patch.object(m,'collect',return_value=ready.copy()) as collect:
+                self.assertTrue(m.install('source','bindings')['cron_installed'])
+                collect.assert_called_once_with('installation_validation')
+                self.assertIn('--trigger cron',cron.read_text())
+                cron.write_text('unrelated existing schedule')
+                with self.assertRaises(m.ProbeError):
+                    m.install('source','bindings')
+                self.assertEqual(cron.read_text(),'unrelated existing schedule')
+
+    def test_failed_collection_cannot_pass_deployment(self):
+        import bind_native_providers as binding
+        receipt={'results':{lane:{'binding':'already_present_verified'} for lane in ('jira','google')}}
+        failed=binding.collect_remote({'collector':'raise ValueError()', 'source':''},receipt)
+        self.assertIn('results',failed)
+        self.assertFalse(binding.deployment_succeeded(failed))
+        failed['collection']={'cron_installed':True,'jira':{'status':'retrieved_and_persisted'},'calendar':{'status':'retrieved_and_persisted'}}
+        self.assertTrue(binding.deployment_succeeded(failed))
+        failed['collection']['calendar']['status']='collection_failed_details_withheld'
+        self.assertFalse(binding.deployment_succeeded(failed))
+
+    def test_deploy_preserves_receipt_but_raises_on_remote_failure(self):
+        import bind_native_providers as binding
+        import contextlib, io
+        from types import SimpleNamespace
+        receipt={'stage':'NATIVE_PROVIDER_BINDINGS','results':{'jira':{'binding':'already_present_verified'}},'collection':{'status':'installation_failed_inspect_before_retry'}}
+        output=io.StringIO()
+        with patch.dict(binding.os.environ,{'REMOTE_USER':'deploy','REMOTE_HOST':'example.invalid'}), patch.object(binding.subprocess,'run',return_value=SimpleNamespace(returncode=1,stdout=json.dumps(receipt))), contextlib.redirect_stdout(output):
+            with self.assertRaises(binding.ProbeError):
+                binding.deploy()
+        self.assertEqual(json.loads(output.getvalue()),receipt)
 
 if __name__=='__main__':
     unittest.main()
