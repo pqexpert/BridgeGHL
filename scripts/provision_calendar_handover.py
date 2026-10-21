@@ -56,6 +56,19 @@ def server(payload):
     public={k:v for k,v in report.items() if k not in {"blocked_instances","protected_changes"}}
     public["blocked_instances_count"]=len(report["blocked_instances"])
     public["protected_changes_count"]=len(report["protected_changes"])
+    from collections import Counter
+    public["blocked_reason_counts"]=dict(Counter(x["reason"] for x in report["blocked_instances"]))
+    shapes=[]
+    for event in current.get("events",[]):
+        if event.get("recurringEventId") not in binding["writable_series"].values():
+            continue
+        desc=event.get("description","")
+        shapes.append({"start_token_count":desc.count("FABRIC CURRENT NOTE"),
+            "end_token_count":desc.count("END FABRIC CURRENT NOTE"),
+            "human_marker_count":desc.count("PRESERVED CONTEXT AND RESPONSE"),
+            "starts_with_start":desc.startswith("FABRIC CURRENT NOTE"),
+            "exact_marker_lines":[line.strip() for line in desc.splitlines() if line.strip() in {"FABRIC CURRENT NOTE","END FABRIC CURRENT NOTE","PRESERVED CONTEXT AND RESPONSE"}]})
+    public["marker_shapes"]=shapes
     public["stage"]="CALENDAR_HANDOVER_READ_ONLY"
     public["adapter_readback_verified"]=hashlib.sha256((root/"calendar_handover.py").read_bytes()).hexdigest()==payload["sha256"]
     return public
