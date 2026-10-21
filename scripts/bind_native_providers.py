@@ -161,6 +161,8 @@ def google(config, call=request):
     else:
         raise ProbeError('google_calendar_pagination_incomplete')
     woo = [c for c in calendars if c.get('summary') == 'WooCalendar' and c.get('accessRole') == 'owner']
+    if len(woo) != 1:
+        raise ProbeError('woo_calendar_identity_ambiguous')
     receipt = {'authentication':'verified', 'account_identity':'verified', 'drive_read':'verified',
                'calendar_list_read':'verified', 'calendar_count':len(calendars),
                'woo_owned_matches':len(woo), 'calendar_writer_enabled':False, 'write_execution':'not_attempted'}
@@ -219,7 +221,20 @@ def run_server(config, base=Path('/etc/ziji-fabric/providers'), call=request):
             results[lane] = {'status':'local_binding_error', 'binding':'inspect_before_retry'}
     results['shopify'] = {'status':'hosted_route_retained_native_deferred', 'binding':'not_changed'}
     results['google']['github_oauth_bindings_present'] = {k:bool(config.get(k)) for k in KEYS if k.startswith('GOOGLE_')}
-    return {'stage':'NATIVE_PROVIDER_BINDINGS', 'results':results, 'host':host_inventory(), 'runtime_activation':False}
+    try:
+        host = host_inventory()
+    except Exception:
+        host = {'status':'inventory_unavailable'}
+    return {'stage':'NATIVE_PROVIDER_BINDINGS', 'results':results, 'host':host, 'runtime_activation':False}
+
+def collect_remote(payload, receipt):
+    try:
+        scope = {'__name__':'collector_remote'}
+        exec(compile(payload['collector'], 'collector', 'exec'), scope)
+        receipt['collection'] = scope['install'](payload['collector'], payload['source'])
+    except Exception:
+        receipt['collection'] = {'status':'installation_failed_inspect_before_retry'}
+    return receipt
 
 def deploy():
     user, host = os.environ['REMOTE_USER'], os.environ['REMOTE_HOST']
@@ -227,7 +242,7 @@ def deploy():
         raise ProbeError('ssh_target_invalid')
     payload = {'source':Path(__file__).read_text(), 'collector':Path(__file__).with_name('collect_native_sources.py').read_text(),
                'config':{k:os.environ.get(k, '').strip() for k in KEYS}}
-    remote = "sudo -n python3 -c 'import json,sys,types; p=json.load(sys.stdin); m=types.ModuleType(\"bind_native_providers\"); sys.modules[m.__name__]=m; exec(compile(p[\"source\"],\"binding\",\"exec\"),m.__dict__); r=m.run_server(p[\"config\"]); s={\"__name__\":\"collector_remote\"}; exec(compile(p[\"collector\"],\"collector\",\"exec\"),s); r[\"collection\"]=s[\"install\"](p[\"collector\"],p[\"source\"]); print(json.dumps(r,sort_keys=True))'"
+    remote = "sudo -n python3 -c 'import json,sys,types; p=json.load(sys.stdin); m=types.ModuleType(\"bind_native_providers\"); sys.modules[m.__name__]=m; exec(compile(p[\"source\"],\"binding\",\"exec\"),m.__dict__); r=m.run_server(p[\"config\"]); print(json.dumps(m.collect_remote(p,r),sort_keys=True))'"
     command = ['ssh', '-i', str(Path.home()/'.ssh/fabric-preflight'), '-o','BatchMode=yes', '-o','ConnectTimeout=15',
                '-o','IdentitiesOnly=yes', '-o','StrictHostKeyChecking=yes',
                '-o','UserKnownHostsFile='+str(Path.home()/'.ssh/fabric-known-hosts'), user+'@'+host, remote]

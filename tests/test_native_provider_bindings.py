@@ -71,6 +71,20 @@ class BindingsTest(unittest.TestCase):
             return {'user':{'emailAddress':'wrong@example.com'}}
         with self.assertRaisesRegex(m.ProbeError, 'google_identity_mismatch'):
             m.google(cfg,wrong)
+        def ambiguous(url, *a, **kw):
+            if 'calendarList' in url:
+                return {'items':[]}
+            return call(url,*a,**kw)
+        with self.assertRaisesRegex(m.ProbeError, 'woo_calendar_identity_ambiguous'):
+            m.google(cfg,ambiguous)
+
+    def test_optional_inventory_does_not_hide_binding_receipts(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(m,'host_inventory',side_effect=OSError):
+            r=m.run_server({},Path(td)/'bindings')
+            self.assertEqual(r['results']['jira']['status'],'binding_missing')
+            self.assertEqual(r['host']['status'],'inventory_unavailable')
+        r=m.collect_remote({'collector':'raise RuntimeError()'}, {'stage':'retained'})
+        self.assertEqual(r['stage'],'retained')
 
     def test_existing_binding_preserved_and_permissions_private(self):
         with tempfile.TemporaryDirectory() as td:
