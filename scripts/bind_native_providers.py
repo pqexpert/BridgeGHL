@@ -225,8 +225,9 @@ def deploy():
     user, host = os.environ['REMOTE_USER'], os.environ['REMOTE_HOST']
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', user) or not re.fullmatch(r'[A-Za-z0-9.:-]+', host):
         raise ProbeError('ssh_target_invalid')
-    payload = {'source':Path(__file__).read_text(), 'config':{k:os.environ.get(k, '').strip() for k in KEYS}}
-    remote = "sudo -n python3 -c 'import json,sys; p=json.load(sys.stdin); s={\"__name__\":\"binding_remote\"}; exec(compile(p[\"source\"],\"binding\",\"exec\"),s); print(json.dumps(s[\"run_server\"](p[\"config\"]),sort_keys=True))'"
+    payload = {'source':Path(__file__).read_text(), 'collector':Path(__file__).with_name('collect_native_sources.py').read_text(),
+               'config':{k:os.environ.get(k, '').strip() for k in KEYS}}
+    remote = "sudo -n python3 -c 'import json,sys,types; p=json.load(sys.stdin); m=types.ModuleType(\"bind_native_providers\"); sys.modules[m.__name__]=m; exec(compile(p[\"source\"],\"binding\",\"exec\"),m.__dict__); r=m.run_server(p[\"config\"]); s={\"__name__\":\"collector_remote\"}; exec(compile(p[\"collector\"],\"collector\",\"exec\"),s); r[\"collection\"]=s[\"install\"](p[\"collector\"],p[\"source\"]); print(json.dumps(r,sort_keys=True))'"
     command = ['ssh', '-i', str(Path.home()/'.ssh/fabric-preflight'), '-o','BatchMode=yes', '-o','ConnectTimeout=15',
                '-o','IdentitiesOnly=yes', '-o','StrictHostKeyChecking=yes',
                '-o','UserKnownHostsFile='+str(Path.home()/'.ssh/fabric-known-hosts'), user+'@'+host, remote]
