@@ -57,3 +57,15 @@ Backups, bridge deployment, hosted source adapters and Calendar handover are
 separate work. A missing native credential blocks only its lane's cutover.
 Keep the existing hosted mission/writer running until the replacement can perform
 its admitted work. No full-migration claim follows from this backup workflow.
+
+## Deterministic source observation
+
+The existing 07:43 UTC daily backup also observes selected source identities from its seven already-cloned, exact-head Git mirrors. This adds zero GitHub API requests and no model requests. Existing BridgeGHL merge events remain a separate event-driven evidence route. This is daily source observation, not hourly GitHub polling.
+
+`scripts/watch_native_sources.py` watches the seven repositories' `AGENTS.md` plus the explicitly listed shared governing controls, Bridge collector/bootstrap, and RSC worker/current-state index. It compares blob identities, so an unrelated commit does not create a source-change finding. Missing watched paths are explicitly `UNKNOWN_MISSING_REQUIRED_SOURCES`; a first observation is a baseline, not admission or proof of deployed adoption. This does not refresh Canva: its live constitutional source still requires the existing authorized source-resolution route.
+
+After successful archive download/decryption verification, the existing pinned SSH transport persists metadata only under `/var/lib/ziji-fabric/native-sources/source-watch/`. Changes create stable, replay-safe pending-review receipts before advancing the observation cursor. `pending.json` retains unresolved receipt keys, including across unchanged runs; there is no automatic acknowledgment or policy adoption. The existing minute-11 collector reads `latest.json` locally and marks absent or older-than-36-hour metadata unknown/stale without blocking Jira or Calendar collection. Owners can recover pending source changes from that existing snapshot during useful work; this is not an actor wakeup or proof of consumer processing.
+
+Observed upstream heads are separate from approved deployed pins. This observer never edits pins, policies, credentials, actor schedules, or model weights. It makes no Jira posts, customer effects or external notifications. The GitHub PAT remains in the existing Actions boundary and is never sent to the VPS.
+
+Observation failure is nonfatal to verified backup acceptance. Because the server snapshot precedes Git cloning, newly written observer metadata is eligible for the *next* backup, not included in the current archive. Its receipt explicitly states this boundary. Native actor pre-effect source resolution/CAS is still required; a daily observation is not permission to execute newer policy.

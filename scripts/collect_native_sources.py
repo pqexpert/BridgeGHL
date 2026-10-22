@@ -114,6 +114,23 @@ def calendar_snapshot(cfg, now, call=request):
         params['pageToken'] = nxt
     raise ProbeError('calendar_pagination_limit')
 
+def source_watch_status(now):
+    """Read daily source metadata locally; no network or admission inference."""
+    path = STATE / 'source-watch' / 'latest.json'
+    try:
+        if path.is_symlink() or path.stat().st_size > 65536:
+            raise ValueError('unsafe_source_metadata')
+        value = json.loads(path.read_text())
+        observed = dt.datetime.fromisoformat(value['observed_at'])
+        if (value.get('stage') != 'SOURCE_IDENTITY_OBSERVATION' or observed.tzinfo is None or
+            observed > now + dt.timedelta(minutes=5) or now - observed > dt.timedelta(hours=36)):
+            raise ValueError('stale_source_metadata')
+        return {k:value.get(k) for k in ('status', 'coverage', 'missing_paths', 'observed_at', 'cadence', 'pending_review_count',
+                'pending_index', 'changed_repositories', 'deployed_pins_changed', 'policy_applied')}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'status':'UNKNOWN_OR_STALE', 'cadence':'existing_daily_backup_07_43_UTC',
+                'effect':'Only source observation unavailable; other collection lanes continue.'}
+
 def collect(trigger='manual'):
     if STATE.is_symlink():
         raise ProbeError('state_path_symlink')
@@ -150,6 +167,7 @@ def collect(trigger='manual'):
                     'snapshot_sha256':hashlib.sha256(raw.encode()).hexdigest()}
             except Exception as e:
                 report[lane] = {'status':str(e) if isinstance(e,ProbeError) else 'collection_failed_details_withheld'}
+        report['source_watch'] = source_watch_status(now)
         atomic(STATE/'latest.json',json.dumps(report,sort_keys=True))
         return report
 
