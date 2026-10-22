@@ -4,9 +4,9 @@ on:
     inputs:
       mode:
         type: choice
-        options: [inspect, execute]
+        options: [inspect, execute, candidate]
         default: inspect
-        description: Read existing state or execute the admitted unit
+        description: Inspect state, probe updated OAuth candidate, or execute admitted unit
   push:
     branches: [main]
     paths: ['.github/workflows/provision-income-native.yml', 'scripts/provision_income_native.py', 'scripts/income_career_pinned.py', 'scripts/income_career_pin.json', 'scripts/inspect_income_native.py']
@@ -25,7 +25,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Probe updated OAuth candidate without persistence
+        if: inputs.mode == 'candidate'
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: python3 scripts/inspect_income_native.py
       - name: Prepare existing SSH transport
+        if: inputs.mode != 'candidate'
         shell: bash
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
@@ -56,6 +64,7 @@ jobs:
 
 
       - name: Execute pinned Income research unit
+        if: inputs.mode != 'candidate'
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}

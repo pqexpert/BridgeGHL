@@ -68,3 +68,55 @@ def inspect():
         except Exception:report["provider_reason_codes"]=[]
     report["private_export"]=encrypted_private_export()
     return report
+
+
+def candidate():
+    """Probe current GitHub OAuth candidate in memory; never install credentials."""
+    report={"stage":"INCOME_OAUTH_CANDIDATE","provider_writes":0,"model_calls":0,"binding_changed":False}
+    keys=("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN")
+    if any(not os.environ.get(k) for k in keys):
+        return {**report,"outcome":"BLOCKED","reason":"candidate_incomplete"}
+    report["expected_client_match"]=hashlib.sha256(os.environ[keys[0]].encode()).hexdigest()=="6d2db9801e2c9c90792968ccb8974b0806616bd4daf1df196e0e5f7636fad3e2"
+    if not report["expected_client_match"]:
+        return {**report,"outcome":"BLOCKED","reason":"candidate_client_mismatch"}
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):return None
+    opener=urllib.request.build_opener(NoRedirect)
+    stage="refresh"
+    try:
+        data=urllib.parse.urlencode({"grant_type":"refresh_token","client_id":os.environ[keys[0]],
+              "client_secret":os.environ[keys[1]],"refresh_token":os.environ[keys[2]]}).encode()
+        with opener.open(urllib.request.Request("https://oauth2.googleapis.com/token",data=data),timeout=30) as r:
+            token=json.load(r)
+        scopes=token.get("scope","").split()
+        report["drive_scope_names"]=[s.rsplit("/",1)[-1] for s in scopes if s.startswith("https://www.googleapis.com/auth/drive")]
+        report["drive_write_scope_present"]=bool(set(scopes)&{"https://www.googleapis.com/auth/drive","https://www.googleapis.com/auth/drive.file"})
+        headers={"Authorization":"Bearer "+token["access_token"]}
+        stage="identity"
+        with opener.open(urllib.request.Request("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)",headers=headers),timeout=30) as r:
+            identity=json.load(r)
+        report["identity_match"]=identity.get("user",{}).get("emailAddress","").lower()=="restorationconsultantsoutreach@gmail.com"
+        if not report["identity_match"]:return {**report,"outcome":"BLOCKED","reason":"identity_mismatch"}
+        stage="folder"
+        url="https://www.googleapis.com/drive/v3/files/1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE?fields=id,mimeType,capabilities(canAddChildren)&supportsAllDrives=true"
+        with opener.open(urllib.request.Request(url,headers=headers),timeout=30) as r:folder=json.load(r)
+        report["folder_read"]="PASS"
+        report["can_add_children"]=folder.get("capabilities",{}).get("canAddChildren",False)
+        report["outcome"]="READY_FOR_REVIEW" if report["drive_write_scope_present"] and report["can_add_children"] else "BLOCKED"
+        return report
+    except urllib.error.HTTPError as exc:
+        report.update(outcome="BLOCKED",failed_stage=stage,http_status=exc.code)
+        try:
+            error=json.loads(exc.read(16000)).get("error")
+            if error in ("invalid_grant","invalid_client","unauthorized_client","invalid_scope","access_denied"):
+                report["oauth_error"]=error
+        except Exception:pass
+        return report
+    except Exception:
+        return {**report,"outcome":"BLOCKED","failed_stage":stage,"reason":"request_or_response_error"}
+
+
+if __name__=="__main__":
+    result=candidate()
+    print(json.dumps(result,sort_keys=True))
+    raise SystemExit(0 if result["outcome"]=="READY_FOR_REVIEW" else 1)
