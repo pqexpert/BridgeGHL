@@ -269,6 +269,13 @@ def main():
                 'ciphertext_sha256':digest(encrypted),'encrypted_bytes':encrypted.stat().st_size,
                 'key_id':manifest['key_id'],'repository_count':len(heads),'download_decrypt_verified':True,
                 'server_snapshot':report,'local_recovery':local_recovery,'native_saas_exported':False,'services_restarted':False}
+            # Use existing verified mirrors, after restore verification. Never fail
+            # recovery because the optional metadata observer cannot run.
+            try:
+                from watch_native_sources import observe_after_backup
+                receipt['source_observation'] = observe_after_backup(root, heads, ssh, run)
+            except Exception:
+                receipt['source_observation'] = {'status':'UNKNOWN', 'backup_acceptance_unchanged':True}
             print(json.dumps(receipt,sort_keys=True))
             Path(os.environ.get('GITHUB_STEP_SUMMARY','backup-summary.md')).write_text(
                 'Encrypted recovery backup verified: '+release['html_url']+'\n\nSHA-256: '+receipt['ciphertext_sha256']+
