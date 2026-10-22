@@ -111,16 +111,49 @@ class Jira:
             if not chunk:raise ValueError("jira_pagination_gap")
         raise ValueError("jira_pagination_limit")
     def receipt(self,key,payload):
-        for row in self.list():
-            if text(row.get("body",{})).startswith(key+"\n"):
-                return {"id":row["id"],"verified":True,"replayed":True}
         body=key+"\n"+json.dumps(payload,sort_keys=True)
-        saved=self.call(JIRA+"/rest/api/3/issue/RBO-97/comment",self.headers,
+        directory=getattr(self,"receipt_dir",STATE/"jira-receipts")
+        directory.mkdir(mode=0o700,parents=True,exist_ok=True)
+        name=handover.digest(key)
+        fd=os.open(directory/(name+".lock"),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,"w") as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            return self._receipt_locked(key,body,directory/(name+".json"))
+
+    def _receipt_locked(self,key,body,path):
+        digest=handover.digest(body)
+        intent=read(path)
+        if intent and intent.get("body_sha256")!=digest:
+            raise ValueError("jira_receipt_key_conflict")
+        base=JIRA+"/rest/api/3/issue/RBO-97/comment"
+        def verify(row,replayed):
+            current=self.call(base+"/"+str(row["id"]),self.headers)
+            if text(current.get("body",{}))!=body:
+                raise ValueError("jira_receipt_readback")
+            receipt={"id":str(current["id"]),"verified":True,"replayed":replayed}
+            save(path,{"body_sha256":digest,"status":"VERIFIED","comment_id":receipt["id"]})
+            if self.comments is not None:
+                self.comments=[x for x in self.comments if str(x["id"])!=receipt["id"]]+[current]
+            return receipt
+        if intent and intent.get("comment_id"):
+            return verify({"id":intent["comment_id"]},True)
+        # Refresh a cached list when reconciling an uncertain previous POST.
+        if intent:self.comments=None
+        matches=[r for r in self.list() if text(r.get("body",{})).startswith(key+"\n")]
+        if len(matches)>1:raise ValueError("jira_duplicate_receipt_key")
+        if matches:
+            if text(matches[0].get("body",{}))!=body:
+                raise ValueError("jira_receipt_key_conflict")
+            return verify(matches[0],True)
+        if intent:
+            # Missing from a completed listing does not establish that an
+            # uncertain POST never committed. Reconcile; never blindly resend.
+            raise ValueError("jira_receipt_post_unknown")
+        save(path,{"body_sha256":digest,"status":"PENDING"})
+        saved=self.call(base,self.headers,
             {"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":body}]}]}})
-        check=self.call(JIRA+"/rest/api/3/issue/RBO-97/comment/"+str(saved["id"]),self.headers)
-        if text(check.get("body",{}))!=body:raise ValueError("jira_receipt_readback")
-        self.comments.append(check)
-        return {"id":str(check["id"]),"verified":True,"replayed":False}
+        save(path,{"body_sha256":digest,"status":"PENDING_READBACK","comment_id":str(saved["id"])})
+        return verify(saved,False)
 
 def windows(now,mode,state):
     if not state.get("baseline_complete"):
