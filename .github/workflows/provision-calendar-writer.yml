@@ -51,9 +51,12 @@ jobs:
               raise SystemExit("Existing SSH key could not be prepared; value withheld")
           PY
           ssh-keygen -y -f ~/.ssh/fabric-preflight >/dev/null 2>&1
-          # Retain the existing deployment's host discovery, not an independent pin.
-          ssh-keyscan -T 10 -H "$REMOTE_HOST" > ~/.ssh/fabric-known-hosts 2>/dev/null
-          test -s ~/.ssh/fabric-known-hosts
+          # Existing independently verified duck transport host key; never trust a fresh scan.
+          test "$REMOTE_HOST" = "74.208.52.45"
+          cat > ~/.ssh/fabric-known-hosts <<'PINNED_HOST'
+          74.208.52.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIFH9lGiaAYMJi/KGGPAKPPz0dQGcCWdY8c6eLNlMr79
+          PINNED_HOST
+          chmod 600 ~/.ssh/fabric-known-hosts
 
 
       - name: Stage or explicitly activate pinned native writer
