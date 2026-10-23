@@ -78,6 +78,7 @@ def install(payload):
                     if stamp.tzinfo is None:raise ValueError("aware_timestamp_required")
                 except (ValueError,TypeError,AttributeError):
                     raise ValueError("admission_config_authority_version") from None
+                scope["validate_policy"](admission_config)
                 if admission_path.is_symlink():raise ValueError("admission_config_conflict_preserved")
                 if admission_path.exists():
                     if admission_path.stat().st_uid != 0 or scope["read"](admission_path) != admission_config:
