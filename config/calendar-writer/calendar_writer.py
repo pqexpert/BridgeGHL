@@ -264,9 +264,10 @@ def native_unit_receipts():
     base=Path("/var/lib/ziji-fabric/dispatch/continuation")
     latest=read(base/"latest.json",{})
     if latest.get("scope")=="admitted_income_research_only" and latest.get("status")=="VERIFIED" and latest.get("unit"):
-        result=read(base/"state.json",{}).get("units",{}).get(latest["unit"],{}).get("result",{})
-        fields=("unit","artifact_sha256","receipt")
-        if (all(result.get(k)==latest.get(k) for k in fields) and latest.get("artifact_sha256")
+        unit=read(base/"state.json",{}).get("units",{}).get(latest["unit"],{})
+        result=unit.get("result",{})
+        fields=("artifact_sha256","receipt")
+        if (unit.get("status")=="VERIFIED" and all(result.get(k)==latest.get(k) for k in fields) and latest.get("artifact_sha256")
                 and latest.get("receipt",{}).get("native_readback") is True):
             found["income"]={"scope":"admitted_income_research_only","unit_outcome":"VERIFIED",
                 "observed_at":result.get("observed_at",latest.get("observed_at")),
@@ -450,7 +451,7 @@ def consume_feedback(state,jira,now):
 def note(candidate,pending,now):
     lane=candidate["lane"];status=candidate["status"]
     expiry=now+timedelta(hours=36)
-    if candidate.get("observed_at") and candidate["status"] not in ("STALE","PENDING"):
+    if candidate.get("observed_at"):
         expiry=min(expiry,handover.stamp(candidate["observed_at"])+timedelta(hours=36))
     action=candidate["action"]
     acknowledgment="JOSH UPDATE RECEIVED: private feedback is captured; verification remains pending.\n" if pending else ""
@@ -559,6 +560,13 @@ def run(mode="DELTA",write=False,scheduled=False,accept_handover=False):
                     doc=source_actions.hosted_document(current)
                     if not doc or handover.digest(doc["body"])!=selected["source_sha256"]:
                         raise ValueError("action_source_changed")
+                if selected.get("source_id","").startswith("calendar-feedback:"):
+                    source_feedback=state["feedback"].get(selected["source_id"])
+                    if not source_feedback:raise ValueError("feedback_source_missing")
+                    source_current=google.get(source_feedback["event_id"])
+                    source_suffix,_=feedback_body(source_current)
+                    if handover.digest(source_suffix)!=selected["source_sha256"]:
+                        raise ValueError("feedback_action_source_changed")
                 effectkey=hashobj({"event":event["id"],"selected":selected,"sources":candidates,"feedback":sorted(state["feedback"])})
                 effects=state.setdefault("effects",{})
                 if effectkey not in effects:

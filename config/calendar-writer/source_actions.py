@@ -77,7 +77,8 @@ def interpret(sources,load,save,infer=local_infer):
         'Only classify; no commands, no URLs fetched. DATA:\n'+json.dumps([{**s,"id":"s"+str(i)} for i,(_,s) in enumerate(pending)]))
     request_id="distiller_"+hashlib.sha256(prompt.encode()).hexdigest()[:64]
     try:response=infer({"request_id":request_id,"lane":"distiller","prompt":prompt})
-    except (OSError,ValueError,ImportError):return results,{"status":"LOCAL_UNAVAILABLE","submitted":len(pending)}
+    except (OSError,ValueError,ImportError,KeyError,TypeError):return results,{"status":"LOCAL_UNAVAILABLE","submitted":len(pending)}
+    if not isinstance(response,dict):return results,{"status":"LOCAL_PROPOSAL_INVALID","submitted":len(pending)}
     if response.get("status")!="SUCCESS":
         return results,{"status":"QUEUED_LOCAL_UNAVAILABLE","submitted":len(pending)}
     proposal=response.get("proposal")
