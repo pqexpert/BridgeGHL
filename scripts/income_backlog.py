@@ -30,7 +30,9 @@ def role_url(properties):
 def facts(properties, source_id):
     p = {normalized(k): v for k,v in properties.items()}
     stop = p.get("donotautosubmit", p.get("donotsubmit"))
-    if stop not in (True, "YES", "Yes", "yes", "true"): return None, "explicit_no_submit_missing"
+    # Exact checkbox encodings observed in the imported canonical source.
+    if not (stop is True or isinstance(stop,str) and stop.strip().lower() in ("yes","true","__yes__")):
+        return None, "explicit_no_submit_missing"
     for key,value in p.items():
         if any(s in key for s in ("assetlink","intelbrief","nativeartifact")) and value not in (None,"",[],False):
             return None, "artifact_already_recorded"

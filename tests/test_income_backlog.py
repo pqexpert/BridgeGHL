@@ -8,6 +8,8 @@ def test_existing_research_requires_no_submit_and_no_artifact():
     value,reason=facts(row(),"a"*32)
     assert reason is None and value["provider"]=="lever"
     assert value["packet_id"]=="NATIVE-"+("A"*32)
+    assert facts({**row(),"Do Not Auto Submit":"__YES__"},"a"*32)[0]["do_not_submit"] is True
+    assert facts({**row(),"Do Not Auto Submit":"__NO__"},"a"*32)[1]=="explicit_no_submit_missing"
     for change,expected in [({"Do Not Auto Submit":False},"explicit_no_submit_missing"),
         ({"Asset Link":"https://drive.google.com/file/known"},"artifact_already_recorded"),
         ({"Status":"Applied"},"not_unfinished_research")]:

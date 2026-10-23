@@ -55,7 +55,7 @@ cleanup() { rm -rf "$stage"; rm -f "$package"; }
 trap cleanup EXIT
 tar -xzf "$package" -C "$stage"
 test "$(cat "$stage/DEPLOYED_SHA")" = "$expected_sha"
-files=(app.py ingestion.py provider_budget.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py scripts/record_highlevel_cutover.py scripts/project_actor_receipts.py scripts/highlevel_request_queue.py scripts/collect_native_sources.py scripts/install_income_continuation.py scripts/income_continuation_bundle.json config/highlevel-actor-policy.json DEPLOYED_SHA)
+files=(app.py ingestion.py scripts/income_backlog.py provider_budget.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py scripts/record_highlevel_cutover.py scripts/project_actor_receipts.py scripts/highlevel_request_queue.py scripts/collect_native_sources.py scripts/install_income_continuation.py scripts/income_continuation_bundle.json config/highlevel-actor-policy.json DEPLOYED_SHA)
 for file in "${files[@]}"; do
   test -f "$stage/$file"
   "${privilege[@]}" mkdir -p "$backup/$(dirname "$file")"
@@ -96,6 +96,7 @@ with urlopen('http://127.0.0.1:8000/openapi.json', timeout=5) as r:
     paths = json.load(r)['paths']
 assert '/read/journey-evidence' in paths
 assert '/read/ingest/income-source' in paths
+assert '/read/ingest/income-backlog' in paths
 assert '/execute/ingest/source-record' in paths
 assert '/dry-run/ingest/source-record' in paths
 assert '/dry-run/task/create' in paths
