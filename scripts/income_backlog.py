@@ -79,7 +79,9 @@ def inspect_manifest(root=ROOT):
         value,reason = facts(row,sid)
         if value and counts[role_url(row)] == 1: candidates += 1
         else: reasons[reason or "duplicate_role_identity"] += 1
+    no_submit=collections.Counter(type(row.get("Do Not Auto Submit")).__name__+":"+str(row.get("Do Not Auto Submit"))[:60] for _,row,_ in rows)
     return {"read_only":True,"provider_calls":0,"model_calls":0,
+            "no_submit_value_distribution":dict(no_submit),
             "discovery_records":len(rows),"historical_candidate_count":candidates,
             "historical_rejection_counts":dict(reasons),
             "property_names":sorted({k for _,row,_ in rows for k in row}),
@@ -87,7 +89,7 @@ def inspect_manifest(root=ROOT):
 
 def read_backlog(cursor, limit, *, location_id, pipeline_id, stage_id,
                  default_contact_id, journal_path, call, root=ROOT):
-    from ingestion import read_income_source, SourceReadError
+    from ingestion import read_income_source, SourceReadError,assemble,source_key,verified_notes
     rows,counts = manifest(root)
     if not rows: return {"items":[],"next_cursor":0,"scanned":0,"coverage":"verified_import_manifest_only"}
     start = cursor % len(rows)
@@ -102,19 +104,37 @@ def read_backlog(cursor, limit, *, location_id, pipeline_id, stage_id,
         result=call(method,path,**kwargs)
         if cacheable:cache[path]=result
         return result
+    # The historical export locates IDs only. Read current native notes once for
+    # the shared internal context, then derive current eligibility and duplicates.
+    notes=cached("GET","/contacts/"+default_contact_id+"/notes").get("notes")
+    if not isinstance(notes,list) or len(notes)>10000:raise ValueError("source_notes_unavailable_or_unbounded")
+    verified=verified_notes(journal_path,default_contact_id)
+    current_sources={};current_counts=collections.Counter()
+    for sid,_,binding in rows:
+        if binding["contact_id"]!=default_contact_id:continue
+        try:
+            versions=assemble(notes,source_key(sid),default_contact_id,verified)
+            if len(versions)!=1:continue
+            source=next(iter(versions.values()))["source"]
+            current_sources[sid]=source
+            role=role_url(source["properties"])
+            if role:current_counts[role]+=1
+        except SourceReadError:continue
     for sid,discovery,binding in scan:
-        # Discovery filters save calls; never establish current eligibility.
-        preliminary,reason=facts(discovery,sid)
-        if reason: reasons[reason]+=1;continue
-        if counts[role_url(discovery)] != 1: reasons["duplicate_role_identity"]+=1;continue
         if binding["contact_id"] != default_contact_id:
             reasons["non_internal_context_record"]+=1;continue
+        if sid not in current_sources:
+            reasons["current_source_missing_or_ambiguous"]+=1;continue
+        preliminary,reason=facts(current_sources[sid]["properties"],sid)
+        if reason:reasons[reason]+=1;continue
+        if current_counts[role_url(current_sources[sid]["properties"])]!=1:
+            reasons["duplicate_current_role_identity"]+=1;continue
         ref={"source_id":sid,"contact_id":binding["contact_id"],"opportunity_id":binding["opportunity_id"]}
         try:
             current=read_income_source(ref,location_id,pipeline_id,default_contact_id,journal_path,cached)
             values,reason=facts(current["source"]["properties"],sid)
             if reason:reasons[reason]+=1;continue
-            if values != preliminary:reasons["source_changed_from_discovery_requires_review"]+=1;continue
+            if values != preliminary:reasons["current_source_changed_during_read"]+=1;continue
             opportunity=call("GET","/opportunities/"+ref["opportunity_id"]).get("opportunity",{})
             if opportunity.get("status")!="open" or opportunity.get("pipelineStageId")!=stage_id:
                 reasons["native_opportunity_not_intake"]+=1;continue

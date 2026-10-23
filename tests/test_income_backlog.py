@@ -16,3 +16,27 @@ def test_existing_research_requires_no_submit_and_no_artifact():
 def test_unsupported_or_conflicting_source_is_not_admitted():
     assert role_url({"Job URL":"https://evil.example/jobs/123"}) is None
     assert role_url({**row(),"Other":"https://jobs.ashbyhq.com/other/12345678-1234-1234-1234-123456789abc"}) is None
+
+def test_historical_missing_flag_does_not_hide_current_native_eligibility():
+    from unittest.mock import patch
+    from scripts import income_backlog as b
+    sid="a"*32
+    binding={"contact_id":"context","opportunity_id":"opportunity"}
+    current={"properties":row()}
+    readback={"source":current,"source_sha256":"b"*64,
+              "legacy_provenance_urls":["https://app.notion.com/p/"+sid]}
+    calls=[]
+    def call(method,path,**kwargs):
+        calls.append(path)
+        if path.endswith("/notes"):return {"notes":[]}
+        return {"opportunity":{"status":"open","pipelineStageId":"intake","updatedAt":"current"}}
+    with patch.object(b,"manifest",return_value=([(sid,{"Do Not Auto Submit":None},binding)],{})), \
+         patch("ingestion.verified_notes",return_value={}), \
+         patch("ingestion.assemble",return_value={"b"*64:{"source":current}}), \
+         patch("ingestion.read_income_source",return_value=readback):
+        result=b.read_backlog(0,8,location_id="location",pipeline_id="pipeline",
+                             stage_id="intake",default_contact_id="context",
+                             journal_path="unused",call=call)
+    assert len(result["items"])==1
+    assert result["items"][0]["facts"]["do_not_submit"] is True
+    assert calls.count("/contacts/context/notes")==1
