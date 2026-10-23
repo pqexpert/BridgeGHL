@@ -45,7 +45,8 @@ def parse(row, policy, now):
     lane = OPS.get(obj["operation"])
     require(lane is not None and lane == obj["lane"] and obj["authority_ref"] == AUTHORITY, "request_scope")
     author = row.get("author_account_id")
-    require(author in policy["issuers"] and lane in policy["issuers"][author]
+    require(author == policy["authority"]["issuer_account_id"]
+            and author in policy["issuers"] and lane in policy["issuers"][author]
             and row.get("update_author_account_id") == author, "request_issuer")
     require(re.fullmatch(r"\d+", str(row.get("id", ""))), "request_comment_id")
     observed, expiry = timeof(obj["observed_at"]), timeof(obj["expires_at"])

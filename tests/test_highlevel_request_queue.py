@@ -55,6 +55,13 @@ class QueueTests(unittest.TestCase):
         return queue.process({"highlevel_request_candidates":items or [self.item]}, POLICY,
             self.journal, exact or self.exact, invoke or self.invoke, publish or self.publish, now, True)
 
+    def test_receipt_publisher_cannot_authorize_commands(self):
+        policy = copy.deepcopy(POLICY)
+        policy['issuers']['native-bot'] = ['income', 'rsc']
+        item = dict(self.item, author_account_id='native-bot', update_author_account_id='native-bot')
+        with self.assertRaisesRegex(ValueError, 'request_issuer'):
+            queue.parse(item, policy, NOW)
+
     def test_write_dedupes_and_preserves_exact_receipt(self):
         first = self.run_queue()
         second = self.run_queue()
