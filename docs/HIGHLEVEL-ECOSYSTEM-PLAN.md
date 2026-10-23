@@ -7,7 +7,7 @@ Skills consumed: Wise Action Governor 2026-09-19.3; HighLevel Write Bridge; SOP-
 
 ## Responsibilities and flow
 
-Notion retains journeys, decisions, source facts and history. Google Drive holds produced artifacts and versioned intake bundles. HighLevel holds actionable relationships, opportunities, follow-up tasks and links to evidence. Native CRM changes remain authoritative for current CRM stages, assignments, DND and conversations. Imports must not overwrite those with stale source snapshots.
+HighLevel is the operational destination for current relationships, opportunities, follow-up tasks, working notes and links to evidence, under the principal’s 2026-10-23 direction. Notion remains historical archive and source aliases; it is not a required current operational write target. Google Drive holds produced artifacts and versioned intake bundles. Preserve existing stable source IDs and legacy source URLs as aliases when resolving HighLevel records; do not rewrite completed cache identities, receipts or artifact histories during handoff. Native CRM changes remain authoritative for current CRM stages, assignments, DND and conversations. Imports must not overwrite those with stale source snapshots. This destination decision does not claim that every reader, producer or unattended runtime has already adopted it.
 
 Use the existing BridgeGHL protected credential, writer, audit and deployment path. No additional vendor, CRM writer, model-based router or production Actor is introduced. Domain labels are segmentation, not access controls. Preserve the existing prohibition on Dzokden purchaser/order/fulfillment PII in the RSC CRM. RD laboratory data requires an admitted business purpose; it is not a production dependency.
 
