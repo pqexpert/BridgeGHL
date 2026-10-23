@@ -42,6 +42,66 @@ def gather(repo,number):
       "next_action":"Owning RSC cycle verifies actual deployment and native acceptance; no automatic closeout.",
       "model_calls":0,"external_messages":0,"domain_writes":0}
     return {"status":"READY","issue":issue,"replay_id":"github:"+repo+":pr:"+str(number)+":merge:"+sha,"receipt":receipt}
+WORKFLOWS = {
+    ".github/workflows/provision-income-native.yml": ("Provision bounded native Income unit", "income"),
+    ".github/workflows/deploy-native-rsc.yml": ("Execute admitted native RSC unit", "rsc"),
+    ".github/workflows/provision-calendar-writer.yml": ("Provision native Calendar writer", "distiller"),
+}
+
+def gather_completion(repo, run_id, attempt):
+    """Record an existing completed execution, never trigger or retry it."""
+    if repo != "pqexpert/BridgeGHL" or type(run_id) is not int or run_id < 1 or type(attempt) is not int or attempt < 1:
+        raise ValueError("workflow_scope")
+    meta = api("/repos/" + repo)
+    run = api("/repos/" + repo + "/actions/runs/" + str(run_id) + "/attempts/" + str(attempt))
+    path = run.get("path")
+    if (run.get("id") != run_id or run.get("run_attempt") != attempt or
+        run.get("repository", {}).get("full_name") != repo or
+        run.get("head_repository", {}).get("full_name") != repo or
+        path not in WORKFLOWS or run.get("name") != WORKFLOWS[path][0] or
+        run.get("event") not in {"push", "workflow_dispatch"} or
+        run.get("head_branch") != meta.get("default_branch") or
+        run.get("status") != "completed"):
+        return {"status": "NO_OP", "reason": "workflow_not_admitted"}
+    sha = run.get("head_sha", "")
+    conclusion = run.get("conclusion")
+    outcomes = {"success": "SUCCESS", "failure": "FAIL", "timed_out": "FAIL",
+                "cancelled": "BLOCKED", "action_required": "BLOCKED",
+                "neutral": "NO_CHANGE", "skipped": "NO_CHANGE", "startup_failure": "FAIL",
+                "stale": "BLOCKED"}
+    if (not re.fullmatch("[0-9a-f]{40}", sha) or conclusion not in outcomes or
+        run.get("html_url") != "https://github.com/" + repo + "/actions/runs/" + str(run_id)):
+        raise ValueError("workflow_identity_invalid")
+    related = api("/repos/" + repo + "/commits/" + sha + "/pulls?per_page=100")
+    if not isinstance(related, list) or len(related) >= 100:
+        raise ValueError("workflow_pr_coverage_unknown")
+    matches = [p for p in related if p.get("merge_commit_sha") == sha and p.get("merged_at") and
+               p.get("base", {}).get("ref") == meta["default_branch"] and
+               p.get("base", {}).get("repo", {}).get("full_name") == repo]
+    if len(matches) != 1 or type(matches[0].get("number")) is not int:
+        return {"status": "NO_OP", "reason": "workflow_merged_source_unverified"}
+    pr = api("/repos/" + repo + "/pulls/" + str(matches[0]["number"]))
+    if (not pr.get("merged") or pr.get("merge_commit_sha") != sha or
+        pr.get("base", {}).get("ref") != meta["default_branch"] or
+        pr.get("base", {}).get("repo", {}).get("full_name") != repo):
+        raise ValueError("pre_effect_pr_changed")
+    receipt = {
+        "lane": WORKFLOWS[path][1], "action_class": "workflow_terminal_handoff",
+        "outcome": outcomes[conclusion], "repository": repo, "workflow_path": path,
+        "workflow_name": WORKFLOWS[path][0], "run_id": run_id, "run_attempt": attempt,
+        "workflow_url": run["html_url"], "workflow_status": "completed",
+        "workflow_conclusion": conclusion, "checked_revision": sha,
+        "pr_number": pr["number"], "pr_url": pr["html_url"], "merged_at": pr["merged_at"],
+        "routing": "SCOPED_RBO_97_WORKFLOW_TERMINAL",
+        "completed_fact": "Exact merged-source workflow attempt reached its reported terminal conclusion.",
+        "native_acceptance_state": "PENDING_VERIFICATION",
+        "next_action": "Owning cycle reuses this terminal evidence and verifies its actual native receipt; no automatic closeout or retry.",
+        "model_calls": 0, "domain_writes": 0, "actor_invocations": 0,
+    }
+    return {"status": "READY", "issue": "RBO-97",
+            "replay_id": "github:" + repo + ":workflow:" + str(run_id) + ":attempt:" + str(attempt),
+            "receipt": receipt}
+
 def server(payload):
     import fcntl
     sys.path.insert(0,"/opt/ziji-fabric/native")
@@ -58,7 +118,12 @@ def server(payload):
     event=payload["event"]
     if event["status"]!="READY":return event
     receipt=event["receipt"]
-    if receipt["repository"] not in REPOS or receipt["action_class"]!="merge_handoff":raise ValueError("event_scope")
+    if receipt["action_class"] == "workflow_terminal_handoff":
+        if (receipt["repository"] != "pqexpert/BridgeGHL" or receipt.get("workflow_path") not in WORKFLOWS
+            or event.get("issue") != "RBO-97"):
+            raise ValueError("event_scope")
+    elif receipt["repository"] not in REPOS or receipt["action_class"] != "merge_handoff":
+        raise ValueError("event_scope")
     if mode=="observe":return {"status":"READY","routing":receipt["routing"],"model_calls":0,"jira_writes":0}
     from native_jira_receipt import publish
     identity=event["replay_id"];cache=STATE/(hashlib.sha256(identity.encode()).hexdigest()+".json")
@@ -74,11 +139,18 @@ def main():
     if mode not in {"event","observe","prove","activate","standby"}:raise ValueError("mode")
     event={}
     if mode in {"event","observe","prove"}:
-        if os.environ.get("GITHUB_EVENT_NAME")=="pull_request_target":
+        if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
             raw=json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            repo=raw["repository"]["full_name"];number=raw["number"]
-        else:repo=os.environ["HANDOFF_REPO"];number=int(os.environ["HANDOFF_PR"])
-        event=gather(repo,number)
+            if raw.get("action") != "completed":raise ValueError("workflow_event_not_terminal")
+            event=gather_completion(raw["repository"]["full_name"],raw["workflow_run"]["id"],raw["workflow_run"]["run_attempt"])
+        elif os.environ.get("HANDOFF_RUN_ID", "").strip():
+            event=gather_completion(os.environ["HANDOFF_REPO"],int(os.environ["HANDOFF_RUN_ID"]),int(os.environ.get("HANDOFF_RUN_ATTEMPT","1")))
+        else:
+            if os.environ.get("GITHUB_EVENT_NAME")=="pull_request_target":
+                raw=json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+                repo=raw["repository"]["full_name"];number=raw["number"]
+            else:repo=os.environ["HANDOFF_REPO"];number=int(os.environ["HANDOFF_PR"])
+            event=gather(repo,number)
     host,user=os.environ["REMOTE_HOST"],os.environ["REMOTE_USER"]
     if not re.fullmatch("[A-Za-z0-9.-]+",host) or not re.fullmatch("[A-Za-z_][A-Za-z0-9_-]*",user):raise ValueError("ssh_target")
     key=os.environ["SSH_PRIVATE_KEY"].strip().replace("\\n","\n")
