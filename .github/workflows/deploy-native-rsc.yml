@@ -1,6 +1,12 @@
 name: Execute admitted native RSC unit
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Stage only, changed-source triage, or explicit legacy one-shot
+        type: choice
+        default: stage
+        options: [stage, daily, launch17]
 permissions:
   contents: read
 jobs:
@@ -46,10 +52,11 @@ jobs:
           chmod 600 ~/.ssh/fabric-known-hosts
 
 
-      - name: Execute pinned RSC unit without schedule change
+      - name: Stage or execute the selected pinned RSC unit
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          RSC_MODE: ${{ inputs.mode }}
         run: python3 scripts/deploy_native_rsc.py
       - name: Remove temporary SSH material
         if: always()
