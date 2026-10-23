@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-PIN="f7b4f44f6d5af9de16744ef53906b622bfa96fdd"
+PIN="8643ae0af1b6f51f570cca6d8d6e379ba3830e58"
 
 def server(payload):
     if os.geteuid()!=0:raise ValueError("root_required")
@@ -33,7 +33,7 @@ def server(payload):
         at=writer.handover.stamp(evidence["observed_at"])
         if abs((writer.utcnow()-at).total_seconds())>600:raise ValueError("hosted_disable_evidence_stale")
         writer.save(writer.ACTIVATION,{"enabled":True,"hosted_writer_disabled":True,"hosted_evidence":evidence,"source_commit":PIN})
-        report=writer.run("FULL",write=True)
+        report=writer.run("FULL",write=True,accept_handover=True)
         if report.get("status") not in ("VERIFIED","NO_CHANGE"):raise ValueError("first_run_not_verified")
         expected="# Existing Distiller six ET slots; off-slot local checks make no API calls.\n0,15,45 * * * * root /usr/bin/python3 /opt/ziji-fabric/calendar-writer/calendar_writer.py --scheduled --write >/dev/null 2>&1\n"
         if cron.exists() and cron.read_text()!=expected:raise ValueError("cron_conflict_preserved")
@@ -48,6 +48,7 @@ def server(payload):
         "feedback_consumed":report["feedback_consumed"],"pending_feedback":report["pending_feedback"],
         "ambiguous_event_count":report["ambiguous_event_count"],"checkpoint":report.get("checkpoint"),
         "source_interpretation":report.get("source_interpretation",{}),
+        "handover_baselines_adopted":report.get("handover_baselines_adopted",0),
         "model_status":report["model_status"],"last_good_full":report.get("last_good_full"),
         "cron_enabled":cron.exists(),"package_readback":all(hashlib.sha256((root/n).read_bytes()).hexdigest()==d for n,d in payload["hashes"].items()),
         "calendar_results":report["calendar_results"]}

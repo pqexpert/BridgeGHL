@@ -198,7 +198,7 @@ def gather(google,binding,state,now,mode):
         rows,window=google.events(lo,hi);window["kind"]=kind;coverage.append(window)
         for event in rows:
             if relevant(event,binding):events[event["id"]]=event
-    pending={r["event_id"] for r in state.get("feedback",{}).values() if r.get("status")!="CONSUMED"}
+    pending={r["event_id"] for r in state.get("feedback",{}).values() if r.get("status")!="CONSUMED" or r.get("interpretation",{}).get("kind")=="OWNER_ACTION"}
     for eid in pending-set(events):
         event=google.get(eid)
         if relevant(event,binding):events[eid]=event
@@ -222,7 +222,7 @@ def ingest(events,binding,state,jira,now):
                 ambiguous.append(eid)
         dig=handover.digest(suffix.strip())
         baselines[eid]={"suffix_digest":dig,"raw_suffix":suffix,"description":event.get("description",""),
-                       "observed_at":iso(now),"etag":event.get("etag")}
+                       "observed_at":iso(now),"etag":event.get("etag"),"protected_fields":handover.protected(event)}
         if eid in state.get("ambiguous_prefixes",{}):ambiguous.append(eid)
         if not has_text:continue
         key="calendar-feedback:"+binding["calendar_id"]+":"+eid+":"+dig
@@ -246,6 +246,60 @@ def ingest(events,binding,state,jira,now):
         save(STATE/"inbox"/lane/(handover.digest(key)+".json"),{"feedback_key":key,**receipt})
     return added,ambiguous
 
+def native_unit_receipts():
+    """Observe bounded native units without relabeling them whole-actor success."""
+    found={}
+    rsc=Path("/var/lib/ziji-fabric/actors/rsc/daily")
+    latest=read(rsc/"latest.json",{})
+    if (latest.get("lane")=="rsc" and latest.get("action_class")=="local_changed_source_triage"
+            and latest.get("native_readback") is True and re.fullmatch(r"[a-f0-9]{64}",latest.get("source_digest",""))):
+        packet=read(rsc/(latest["source_digest"]+".json"),{})
+        artifact=Path(packet.get("artifact_path",""))
+        if artifact.is_absolute() and artifact.resolve().is_relative_to(rsc.resolve()):
+            content=read(artifact)
+            if content is not None and handover.digest(artifact.read_text())==latest.get("artifact_sha256"):
+                found["rsc"]={"scope":"local_changed_source_triage","unit_outcome":latest.get("outcome"),
+                    "observed_at":latest.get("observed_at"),"native_readback":True,"whole_actor_replaced":False,
+                    "source_digest":latest["source_digest"],"calendar_candidate_available":False}
+    base=Path("/var/lib/ziji-fabric/dispatch/continuation")
+    latest=read(base/"latest.json",{})
+    if latest.get("scope")=="admitted_income_research_only" and latest.get("status")=="VERIFIED" and latest.get("unit"):
+        result=read(base/"state.json",{}).get("units",{}).get(latest["unit"],{}).get("result",{})
+        fields=("unit","artifact_sha256","receipt")
+        if (all(result.get(k)==latest.get(k) for k in fields) and latest.get("artifact_sha256")
+                and latest.get("receipt",{}).get("native_readback") is True):
+            found["income"]={"scope":"admitted_income_research_only","unit_outcome":"VERIFIED",
+                "observed_at":result.get("observed_at",latest.get("observed_at")),
+                "native_readback":True,"whole_actor_replaced":False,"source_digest":latest["artifact_sha256"],
+                "calendar_candidate_available":False}
+    return found
+
+def accept_handover_baselines(google,binding,state,events,now):
+    """One explicit post-pause baseline adoption; never infer authorship of drift."""
+    active=handover.private_read(ACTIVATION)
+    evidence=active.get("hosted_evidence",{})
+    if (active.get("enabled") is not True or active.get("hosted_writer_disabled") is not True
+            or evidence.get("id")!="6a92e1ad92888191a7a8d6ce4fcc1acc" or evidence.get("is_enabled") is not False
+            or abs((now-handover.stamp(evidence["observed_at"])).total_seconds())>600):
+        raise ValueError("fresh_hosted_pause_required")
+    adopted=0
+    for eid in list(state.get("ambiguous_prefixes",{})):
+        event=events.get(eid);prior=state.get("baselines",{}).get(eid,{})
+        if not event or not handover.eligible(event,set(binding["writable_series"].values()),now):continue
+        if not prior.get("protected_fields") or now-handover.stamp(prior["observed_at"])>timedelta(hours=2):continue
+        try:_,suffix=handover.split_description(event.get("description",""))
+        except ValueError:continue
+        if suffix!=prior.get("raw_suffix") or handover.protected(event)!=prior["protected_fields"]:continue
+        if google.get(eid)!=event:continue
+        state.setdefault("handover_baselines",{})[eid]={"observed_at":iso(now),
+            "prior_description_sha256":handover.digest(prior["description"]),
+            "accepted_description_sha256":handover.digest(event["description"]),
+            "suffix_sha256":handover.digest(suffix),"protected_sha256":hashobj(handover.protected(event)),
+            "basis":"explicit_post_pause_baseline_adoption_not_authorship_inference"}
+        prior["description"]=event["description"]
+        del state["ambiguous_prefixes"][eid];adopted+=1
+    return adopted
+
 def lane_receipts(jira,now):
     found={}
     for row in jira.list():
@@ -260,7 +314,11 @@ def lane_receipts(jira,now):
             "reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+doc["comment_id"],
             "observed_at":iso(at),"comment_id":doc["comment_id"],
             "source_sha256":handover.digest(doc["body"])}
-    return [found.get(lane,{"lane":lane,"status":"PENDING","reference":"https://restoration-mt.atlassian.net/browse/RBO-97","observed_at":None}) for lane in ("income","rsc","store")]
+    units=native_unit_receipts()
+    rows=[found.get(lane,{"lane":lane,"status":"PENDING","reference":"https://restoration-mt.atlassian.net/browse/RBO-97","observed_at":None}) for lane in ("income","rsc","store")]
+    for row in rows:
+        if row["lane"] in units:row["native_unit"]=units[row["lane"]]
+    return rows
 
 def source_candidates(jira,receipts,state,now):
     sources=[]
@@ -269,12 +327,20 @@ def source_candidates(jira,receipts,state,now):
         if receipt["status"] in ("STALE","PENDING") or not receipt.get("comment_id"):continue
         doc=source_actions.hosted_document(rows[receipt["comment_id"]])
         if doc:
-            sources.append({"id":"jira:"+doc["comment_id"],"kind":"hosted_receipt","lane":receipt["lane"],
-                "text":doc["body"],"observed_at":receipt["observed_at"],"reference":receipt["reference"]})
+            body=doc["body"];excerpt=body
+            if len(body)>3200:
+                # A real long receipt must not starve the queue. One exact window
+                # around owner/next-action content; remaining text is not declared read.
+                match=re.search(r"(?im)^.*(?:next action|Josh|owner action).*$",body)
+                excerpt=body[max(0,match.start()-100):match.start()+2200] if match else ""
+            if excerpt:
+                sources.append({"id":"jira:"+doc["comment_id"],"kind":"hosted_receipt","lane":receipt["lane"],
+                    "text":excerpt,"canonical_sha256":handover.digest(body),"full_source_covered":excerpt==body,
+                    "observed_at":receipt["observed_at"],"reference":receipt["reference"]})
     feedback=state.get("feedback",{})
     # Genuine observed revisions first; initial preserved boilerplate is not a user edit.
     for key,r in sorted(feedback.items(),key=lambda pair:(pair[1].get("classification")!="OWNER_REPORTED",pair[0])):
-        if r.get("status")=="CONSUMED":continue
+        if r.get("status")=="CONSUMED" and r.get("interpretation",{}).get("kind")!="OWNER_ACTION":continue
         sources.append({"id":key,"kind":"feedback","lane":r["owning_lane"],"text":r["private_suffix"],
             "classification":r["classification"],"observed_at":r["observed_at"],
             "reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+str(r.get("jira_capture",{}).get("id",""))})
@@ -282,7 +348,7 @@ def source_candidates(jira,receipts,state,now):
     decisions,summary=source_actions.interpret(sources,
         lambda key:read(directory/(key+".json")),
         lambda key,value:save(directory/(key+".json"),value))
-    candidates=[];counts={}
+    candidates=[];counts={};own_consumed=0
     for source in sources:
         result=decisions.get(source["id"])
         if not result:continue
@@ -294,6 +360,19 @@ def source_candidates(jira,receipts,state,now):
             save(STATE/"inbox"/receipt["owning_lane"]/(handover.digest(source["id"])+".json"),
                 {"feedback_key":source["id"],**receipt})
             if receipt["current_digest"]!=state.get("baselines",{}).get(receipt["event_id"],{}).get("suffix_digest"):continue
+            if (receipt["owning_lane"]=="distiller" and receipt.get("status")!="CONSUMED"
+                    and result["kind"] in ("CONTEXT_ONLY","OWNER_REPORT","OWNER_ACTION")):
+                # Distiller owns interpretation of its own input, not provider completion.
+                minimal={"event_id":receipt["event_id"],"digest":receipt["current_digest"],
+                    "owning_lane":"distiller","capture_receipt":receipt["jira_capture"]["id"],
+                    "verification_status":"INTERPRETED_PENDING_VERIFICATION",
+                    "interpretation_sha256":hashobj(result),"provider_verification":"PENDING",
+                    "calendar_acknowledgment":"NEXT_ELIGIBLE_OR_JUSTIFIED_NO_CHANGE"}
+                receipt["consumption_receipt"]=jira.receipt("FABRIC_CALENDAR_FEEDBACK_CONSUMED "+source["id"],minimal)
+                receipt["status"]="CONSUMED";receipt["consumed_at"]=iso(now)
+                receipt["verification_status"]="INTERPRETED_PENDING_VERIFICATION";own_consumed+=1
+                save(STATE/"inbox"/"distiller"/(handover.digest(source["id"])+".json"),
+                    {"feedback_key":source["id"],**receipt})
         at=handover.stamp(source["observed_at"])
         if now-at>timedelta(hours=36) or at>now+timedelta(minutes=5):continue
         action=source_actions.admitted_action(source,result)
@@ -302,10 +381,12 @@ def source_candidates(jira,receipts,state,now):
             "why":"The cited source explicitly requests owner attention; interpretation does not verify completion.",
             "safe_default":"Preserve existing commitments; take no external action without its existing authority.",
             "reference":source["reference"],"observed_at":source["observed_at"],
-            "source_id":source["id"],"source_sha256":result["source_sha256"]}
+            "source_id":source["id"],"source_sha256":source.get("canonical_sha256",result["source_sha256"])}
         candidates.append(candidate)
     summary.update({"classifications":counts,"admitted":len(candidates),
-        "pending_interpretation":len(sources)-len(decisions),"owning_consumption_asserted":False})
+        "pending_interpretation":len(sources)-len(decisions),"distiller_owned_consumed":own_consumed,
+        "partial_source_excerpts":sum(s.get("full_source_covered") is False for s in sources),
+        "foreign_lane_consumption_asserted":False})
     return candidates,summary
 
 
@@ -398,7 +479,7 @@ def write_one(google,event,prefix,baseline):
     return {"status":"VERIFIED","event_id":event["id"],"description_sha256":handover.digest(description),
             "suffix_sha256":handover.digest(suffix),"protected_fields_verified":True,"etag":after.get("etag")}
 
-def run(mode="DELTA",write=False,scheduled=False):
+def run(mode="DELTA",write=False,scheduled=False,accept_handover=False):
     now=utcnow();local=now.astimezone(ET)
     if scheduled and local.strftime("%H:%M") not in SLOTS:return {"status":"NOT_DUE","calendar_writes":0}
     if scheduled:mode=SLOTS[local.strftime("%H:%M")]
@@ -440,6 +521,7 @@ def run(mode="DELTA",write=False,scheduled=False):
             else:
                 intent["resolved"]=True;intent["effect_absent_verified"]=True;save(intent_path,intent)
         events,coverage=gather(google,binding,state,now,mode)
+        adopted=accept_handover_baselines(google,binding,state,events,now) if write and accept_handover else 0
         added,ambiguous=ingest(events,binding,state,jira,now)
         state["coverage"]=coverage
         if any(x["kind"]=="baseline" for x in coverage):state["baseline_complete"]=True
@@ -451,6 +533,7 @@ def run(mode="DELTA",write=False,scheduled=False):
         admitted=actionable_candidates(candidates,now)
         sourced,interpretation=source_candidates(jira,candidates,state,now)
         admitted.extend(sourced)
+        consumed+=interpretation.get("distiller_owned_consumed",0)
         fingerprint=hashobj({"receipts":candidates,"admitted":admitted,"feedback_versions":{k:r["current_digest"] for k,r in state["feedback"].items()}})
         save(STATE/"state.json",state)
         selected,modelstatus=select_candidate(admitted,"distiller_"+fingerprint[:48])
@@ -458,7 +541,7 @@ def run(mode="DELTA",write=False,scheduled=False):
             "feedback_added":added,"feedback_consumed":consumed,"pending_feedback":sum(r["status"]!="CONSUMED" for r in state["feedback"].values()),
             "ambiguous_event_count":len(ambiguous),"lane_receipts":candidates,"model_status":modelstatus,
             "calendar_writes":0,"calendar_results":[],"paid_fallback":False,"status":"NO_CHANGE",
-            "source_interpretation":interpretation}
+            "source_interpretation":interpretation,"handover_baselines_adopted":adopted}
         if selected:
             attributable=[r for r in state["feedback"].values() if r["owning_lane"]==selected["lane"]
                           and r["classification"]=="OWNER_REPORTED" and r.get("jira_capture",{}).get("verified")]
