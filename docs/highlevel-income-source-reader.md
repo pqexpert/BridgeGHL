@@ -19,3 +19,12 @@ Remaining adoption work before unattended HighLevel-first execution:
 4. Reuse existing journaled ingestion for verified artifact/receipt writeback, preserving stage, contact fields and history.
 
 This PR provides an operationally consumable native reader, not proof that the hourly controller has switched admission sources or that all imported records are fresh.
+
+
+## Protected operating checkpoint and intake compatibility
+
+`scripts/record_highlevel_cutover.py --execute` is an explicit, fixed non-PII operating checkpoint: it previews the existing source writer, writes through that same journaled path, and reads the exact source digest back through the native Income reader. It imports the existing bridge binding privately, uses loopback only without redirects/proxies, and persists a root-private receipt. No job admission, model invocation or outreach is present. Repeated invocation reconciles the same fixed source identity/content through existing ingestion idempotency.
+
+The reviewed controller bundle accepts typed HighLevel references while preserving proven legacy aliases. Installer validation permits the exact `highlevel://location/.../contact/...[/opportunity/...]` identity only when it matches the typed canonical reference and its source digest; historical tracker/cache keys are unchanged. The Income execution runtime already accepts these nonempty tracker identities, so its cache algorithm and existing artifact bytes require no change. A source refresh installs the reviewed controller; it does not fabricate a next opportunity or spend model budget.
+
+Checkpoint execution requires the existing protected workflow's explicit opt-in. Source deployment alone does not create the note. Native reader delivery, controller refresh, checkpoint readback and a future real opportunity's execution are separate evidence.
