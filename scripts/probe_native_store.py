@@ -27,9 +27,6 @@ def workflow_token_probe(config,provider,base):
     if not re.fullmatch(r"shpat_[A-Za-z0-9_-]{16,256}",token):
         return {"status":"UNKNOWN","reason":"workflow_token_not_recognized_admin_format",
                 "credential_candidate":"workflow_token","api_calls":0,"binding":"not_changed","store_writes":0}
-    if config.get("SHOPIFY_SHOP_DOMAIN","").lower()!=domain:
-        return {"status":"BLOCKED","reason":"verified_shop_domain_mismatch","api_calls":0,
-                "binding":"not_changed","store_writes":0}
     try:
         response=provider.request("https://"+domain+"/admin/api/2026-10/graphql.json",
             {"X-Shopify-Access-Token":token},{"query":

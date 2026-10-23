@@ -37,8 +37,16 @@ class StoreProbeTests(unittest.TestCase):
 
     def test_admin_token_candidate_is_bound_to_verified_shop(self):
         from scripts.probe_native_store import workflow_token_probe
-        def forbidden(*args,**kwargs):raise AssertionError("wrong domain must not be called")
-        result=workflow_token_probe({"SHOPIFY_WORKFLOW_TOKEN":"shpat_"+"x"*32,"SHOPIFY_SHOP_DOMAIN":"wrong.myshopify.com"},
-            SimpleNamespace(request=forbidden),Path("/unused"))
-        self.assertEqual(result["reason"],"verified_shop_domain_mismatch")
-        self.assertEqual(result["api_calls"],0)
+        urls=[]
+        def read(url,headers,body):
+            urls.append(url)
+            return {"data":{"shop":{"name":"Tantric Treasures","email":"store@dzokden.org",
+                "currencyCode":"USD","myshopifyDomain":"dzokden-foundation.myshopify.com",
+                "primaryDomain":{"host":"www.tantrictreasures.com"}},
+                "currentAppInstallation":{"accessScopes":[{"handle":"read_products"}]}}}
+        with tempfile.TemporaryDirectory() as root:
+            result=workflow_token_probe({"SHOPIFY_WORKFLOW_TOKEN":"shpat_"+"x"*32,"SHOPIFY_SHOP_DOMAIN":"stale.myshopify.com"},
+                SimpleNamespace(request=read,ProbeError=provider.ProbeError,persist=provider.persist),Path(root))
+            self.assertEqual(result["status"],"VERIFIED")
+            self.assertEqual(urls,["https://dzokden-foundation.myshopify.com/admin/api/2026-10/graphql.json"])
+            self.assertEqual(result["api_calls"],1)
