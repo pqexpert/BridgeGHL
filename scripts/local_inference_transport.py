@@ -46,25 +46,34 @@ def run_locked(request):
             if prior["request_hash"]!=fingerprint:raise ValueError("request_id_conflict")
             if p==receipt:return prior
     payload={"request":request,"request_hash":fingerprint,"input_hashes":manifest,"status":"QUEUED_LOCAL_UNAVAILABLE","paid_fallback":False}
-    key=(CONFIG/"api-key").read_text().strip()
-    req=urllib.request.Request("http://127.0.0.1:18182/v1/chat/completions",data=json.dumps(body).encode(),
-          headers={"Content-Type":"application/json","Authorization":"Bearer "+key})
-    try:
-        with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(req,timeout=180) as response:
-            result=json.load(response)
-    except urllib.error.HTTPError as exc:
-        if exc.code<500: raise ValueError("local_http_"+str(exc.code)) from None
-        atomic(queued,payload);return {k:v for k,v in payload.items() if k!="request"}
-    except (urllib.error.URLError,TimeoutError,OSError):
-        atomic(queued,payload);return {k:v for k,v in payload.items() if k!="request"}
-    msg=result["choices"][0]["message"]
-    if msg.get("tool_calls"):raise ValueError("tool_request_rejected")
-    result={"request_id":request["request_id"],"lane":request["lane"],"request_hash":fingerprint,
-        "status":"SUCCESS","proposal":msg.get("content") or "","usage":result.get("usage"),
-        "input_hashes":manifest,"external_effects":False,"paid_fallback":False}
-    atomic(receipt,result)
-    if queued.exists():queued.unlink()
-    return result
+    locks=STATE/"locks";locks.mkdir(parents=True,mode=0o700,exist_ok=True)
+    fd=os.open(str(locks/"global-inference.lock"),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,"w") as global_lock:
+        try:fcntl.flock(global_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            payload["status"]="QUEUED_LOCAL_BUSY"
+            atomic(queued,payload)
+            return {k:v for k,v in payload.items() if k!="request"}
+        key=(CONFIG/"api-key").read_text().strip()
+        req=urllib.request.Request("http://127.0.0.1:18182/v1/chat/completions",data=json.dumps(body).encode(),
+              headers={"Content-Type":"application/json","Authorization":"Bearer "+key})
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(req,timeout=180) as response:
+                result=json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code<500: raise ValueError("local_http_"+str(exc.code)) from None
+            atomic(queued,payload);return {k:v for k,v in payload.items() if k!="request"}
+        except (urllib.error.URLError,TimeoutError,OSError):
+            atomic(queued,payload);return {k:v for k,v in payload.items() if k!="request"}
+        msg=result["choices"][0]["message"]
+        if msg.get("tool_calls"):raise ValueError("tool_request_rejected")
+        result={"request_id":request["request_id"],"lane":request["lane"],"request_hash":fingerprint,
+            "status":"SUCCESS","proposal":msg.get("content") or "","usage":result.get("usage"),
+            "input_hashes":manifest,"external_effects":False,"paid_fallback":False}
+        atomic(receipt,result)
+        if queued.exists():queued.unlink()
+        return result
+
 def run(request):
     prepare(request)
     locks=STATE/"locks";locks.mkdir(parents=True,mode=0o700,exist_ok=True)

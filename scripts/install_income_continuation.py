@@ -22,7 +22,7 @@ def install(payload):
     if os.geteuid() != 0: raise ValueError("root_required")
     from collect_native_sources import atomic
     bundle = payload["continuation"]
-    for name in ("controller", "collector", "runtime"):
+    for name in ("controller", "collector", "runtime", "native_selector", "transport"):
         if hashlib.sha256(bundle[name].encode()).hexdigest() != bundle["hashes"][name]:
             raise ValueError("continuation_hash_mismatch")
     cron = Path("/etc/cron.d/ziji-fabric-native-sources")
@@ -58,6 +58,9 @@ def install(payload):
     collector = Path("/opt/ziji-fabric/native/collect_native_sources.py")
     if collector.is_symlink() or hashlib.sha256(collector.read_bytes()).hexdigest() not in (bundle["collector_previous_sha256"],bundle["hashes"]["collector"]):
         raise ValueError("collector_changed_preserved")
+    transport=Path('/usr/local/lib/ziji-local-link/local_inference_transport.py')
+    if transport.is_symlink() or hashlib.sha256(transport.read_bytes()).hexdigest() not in (bundle['transport_previous_sha256'],bundle['hashes']['transport']):
+        raise ValueError('transport_changed_preserved')
     # Serialize source/queue installation against both current and legacy execution.
     with (state / "controller.lock").open("a") as control:
         control_path = state / "controller.lock"; control_path.chmod(0o600)
@@ -105,7 +108,9 @@ def install(payload):
                     config_state = "INITIALIZED"
             sources = {root / "income_continuation.py":bundle["controller"],
                        Path("/opt/ziji-fabric/income/career_unit.py"):bundle["runtime"],
-                       collector:bundle["collector"]}
+                       collector:bundle["collector"],
+                       root/"native_income_backlog.py":bundle["native_selector"],
+                       transport:bundle["transport"]}
             for path, source in sources.items():
                 if path.is_symlink(): raise ValueError("source_symlink")
                 atomic(path, source)
@@ -119,7 +124,7 @@ def install(payload):
                        "source_readback":True,"admission_config":config_state,"queue_unchanged":refresh,"queue_items":len(items),"source_pins":bundle["pins"],
                        "installed_at":now.isoformat(),"existing_cadence":"hourly_at_minute_11",
                        "new_scheduler":False,"model_calls":0,"jobs_executed":0,
-                       "paid_fallback":False,"daily_model_limit":1,
+                       "paid_fallback":False,"daily_model_limit":24,
                        "pause_preserved":(state / "pause").exists()}
             atomic(state / "installation.json",json.dumps(receipt,sort_keys=True))
             return receipt
@@ -140,7 +145,9 @@ def observe(bundle, wake=False):
     installed = load(state / "installation.json")
     files = {"controller":"/opt/ziji-fabric/dispatch/continuation/income_continuation.py",
              "runtime":"/opt/ziji-fabric/income/career_unit.py",
-             "collector":"/opt/ziji-fabric/native/collect_native_sources.py"}
+             "collector":"/opt/ziji-fabric/native/collect_native_sources.py",
+             "native_selector":"/opt/ziji-fabric/dispatch/continuation/native_income_backlog.py",
+             "transport":"/usr/local/lib/ziji-local-link/local_inference_transport.py"}
     hashes = {}
     for name, filename in files.items():
         path = Path(filename)
@@ -189,6 +196,9 @@ def observe(bundle, wake=False):
                 for key,unit in units.items() if unit.get("status")=="VERIFIED"],
             "unfinished_units":sum(units.get(key,{}).get("status") != "VERIFIED" for key in queue_ids),
             "daily_model_budget_reserved":today in ledger.get("model_days", {}),
+            "daily_model_limit":24,
+            "daily_model_reservations":len(ledger.get("model_days",{}).get(today,[])) if isinstance(ledger.get("model_days",{}).get(today,[]),list) else 1,
+            "backlog_observation":ledger.get("backlog_observation"),
             "latest":{k:latest[k] for k in ("status","reason","phase","observed_at",
                        "artifact_sha256","canonical_writeback") if k in latest},
             "caller":{k:caller[k] for k in ("status","exit_code","started_at","observed_at") if k in caller},

@@ -23,6 +23,13 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,"request_id_conflict"):
                     client.run(dict(request,prompt="changed"))
                 self.assertEqual(call.call_count,1)
+            import fcntl
+            with (client.STATE/"locks/global-inference.lock").open("w") as lock:
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                with patch.object(client.urllib.request.OpenerDirector,"open") as call:
+                    busy=client.run(dict(request,request_id="other-lane",lane="income"))
+                    self.assertEqual(busy["status"],"QUEUED_LOCAL_BUSY")
+                    call.assert_not_called()
             body,fingerprint,manifest=client.prepare(request)
             client.atomic(client.STATE/"results"/"bounded-proof.json",{"request_hash":fingerprint,"status":"SUCCESS"})
             with patch.object(client.urllib.request.OpenerDirector,"open") as call:

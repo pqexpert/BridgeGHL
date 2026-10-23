@@ -12,6 +12,10 @@ def _server(payload):
     import sys
     import fcntl
     if os.geteuid()!=0:raise ValueError("root_required")
+    if payload.get("mode") == "backlog-inspect":
+        scope={"__name__":"backlog_inspection"}
+        exec(compile(payload["backlog_reader"],"income_backlog.py","exec"),scope)
+        return scope["inspect_manifest"]()
     if payload.get("mode") == "inspect":
         scope={"__name__":"income_inspection"}
         exec(compile(payload["inspector"],"income_inspection.py","exec"),scope)
@@ -99,9 +103,10 @@ def deploy():
     sha=hashlib.sha256(runtime.encode()).hexdigest()
     if manifest!={"source_commit":PIN,"sha256":sha}:raise ValueError("runtime_pin")
     mode=os.environ.get("INCOME_MODE","inspect")
-    if mode not in {"inspect","execute","resume","continuation","continuation-refresh","continuation-status","continuation-wake"}:raise ValueError("invalid_mode")
+    if mode not in {"backlog-inspect","inspect","execute","resume","continuation","continuation-refresh","continuation-status","continuation-wake"}:raise ValueError("invalid_mode")
     payload={"source":here.read_text(),"runtime":runtime,"sha256":sha,"mode":mode,
              "inspector":here.with_name("inspect_income_native.py").read_text()}
+    if mode == "backlog-inspect": payload["backlog_reader"]=here.with_name("income_backlog.py").read_text()
     if mode.startswith("continuation"):
         payload["installer"]=here.with_name("install_income_continuation.py").read_text()
         payload["continuation"]=json.loads(here.with_name("income_continuation_bundle.json").read_text())
@@ -126,7 +131,7 @@ def deploy():
     if mode in {"continuation","continuation-refresh"}:
         if report.get("outcome")!="STAGED" or report.get("source_readback") is not True: raise ValueError("continuation_install_failed")
         return
-    if mode=="inspect":
+    if mode in {"inspect","backlog-inspect"}:
         if report.get("read_only") is not True:raise ValueError("inspection_failed")
         return
     if report.get("outcome")!="SUCCESS" or not report.get("native_receipt_readback"):

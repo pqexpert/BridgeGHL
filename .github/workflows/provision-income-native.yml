@@ -4,7 +4,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [inspect, execute, candidate, resume, continuation, continuation-refresh, continuation-status, continuation-wake]
+        options: [backlog-inspect, inspect, execute, candidate, resume, continuation, continuation-refresh, continuation-status, continuation-wake]
         default: inspect
         description: Inspect state, probe updated OAuth candidate, or execute admitted unit
   push:

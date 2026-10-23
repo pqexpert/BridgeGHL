@@ -101,8 +101,10 @@ def read_income_source(binding, location_id, pipeline_id, default_contact_id, jo
     if explicit is not None:
         fail(bool(oid), "opportunity_required_for_research_projection")
     return {"domain":"income","operational_system":"highlevel","source_id":source_id,
-            "source_key":key,"source_sha256":digest,"location_id":location_id,"contact_id":cid,
-            "opportunity_id":oid,"note_ids":[x[1] for x in selected["parts"].values()],
+            "source_key":key,"source_sha256":digest,"source_version_count":len(versions),
+            "source_versions":sorted(versions),"default_context_contact_id":default_contact_id,"location_id":location_id,"contact_id":cid,
+            "opportunity_id":oid,"opportunity_updated":opportunity.get("updatedAt") if opportunity else None,
+            "opportunity_status":opportunity.get("status") if opportunity else None,"note_ids":[x[1] for x in selected["parts"].values()],
             "native_readback":True,"source":source,"admission_projection":explicit,
             "execution_admitted":False,"provider_mutations":0,"model_calls":0,
             "legacy_provenance_urls":sorted({v["source"].get("source_url","") for v in versions.values()
@@ -134,6 +136,13 @@ class IncomeSourceRead(BaseModel):
 
     class Config:
         extra = 'forbid'
+
+
+class IncomeBacklogRead(BaseModel):
+    cursor: int = Field(default=0,ge=0)
+    limit: int = Field(default=8,ge=1,le=12)
+    class Config:
+        extra = "forbid"
 
 
 def record_key(record):
@@ -357,6 +366,22 @@ def register_routes(bridge):
         with actor_scope('income', path):
             return read_income_record(record, x_api_key)
 
+    def read_backlog(record: IncomeBacklogRead, x_api_key: Optional[str] = Header(default=None)):
+        bridge.require_api_key(x_api_key)
+        from scripts.income_backlog import read_backlog as reader
+        from provider_budget import actor_scope
+        cfg=configuration('income')
+        path=os.path.join(os.path.dirname(bridge.AUDIT_LOG_PATH),'ingestion.sqlite3')
+        if not all(cfg.values()):raise HTTPException(409,'income_backlog_binding_unavailable')
+        try:
+            with actor_scope('income',path):
+                return reader(record.cursor,record.limit,location_id=bridge.HIGHLEVEL_LOCATION_ID,
+                    pipeline_id=cfg['pipeline_id'],stage_id=cfg['stage_id'],
+                    default_contact_id=cfg['default_contact_id'],journal_path=path,call=call)
+        except (OSError,ValueError,KeyError,TypeError,sqlite3.Error):
+            raise HTTPException(409,'income_backlog_source_unavailable') from None
+
+    bridge.app.post('/read/ingest/income-backlog')(read_backlog)
     bridge.app.post('/read/ingest/income-source')(read_income)
     bridge.app.post('/dry-run/ingest/source-record')(dry_run)
     bridge.app.post('/execute/ingest/source-record')(execute)

@@ -95,9 +95,14 @@ def jira_snapshot(cfg, call=request):
                                  'body':body, 'reference':'https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId='+row['id']})
         start += len(rows)
         if start >= page['total']:
+            try:
+                from collect_rsc_source import snapshot as rsc_snapshot
+                rsc_work_source=rsc_snapshot(cfg,call)
+            except Exception:
+                rsc_work_source={'source_verified':False,'reason':'rsc_source_unavailable'}
             return {'coverage':'all_issue_comments', 'comments_scanned':start, 'receipt_candidates':comments,
                     'income_admission_candidates':admissions, 'operational_authority_candidates':authority,
-                    'highlevel_request_candidates':requests,
+                    'highlevel_request_candidates':requests, 'rsc_work_source':rsc_work_source,
                     'source_verified':True, 'actor_execution_verified':False}
         if not rows:
             raise ProbeError('jira_pagination_incomplete')
@@ -244,6 +249,20 @@ def continuation(timeout=300):
     atomic(Path('/var/lib/ziji-fabric/dispatch/continuation/caller-latest.json'), json.dumps(result, sort_keys=True))
     return result
 
+def rsc_continuation(timeout=240):
+    import subprocess
+    worker=Path('/opt/ziji-fabric/actors/rsc/native_rsc.py')
+    if not worker.exists():return {'stage':'RSC_CONTINUATION_CALL','status':'NOT_INSTALLED'}
+    if worker.is_symlink() or worker.stat().st_uid!=0 or worker.stat().st_mode & 0o022:
+        raise ProbeError('rsc_source_permissions')
+    try:
+        run=subprocess.run(['/usr/bin/python3',str(worker),'--daily'],stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,timeout=timeout)
+        return {'stage':'RSC_CONTINUATION_CALL','status':'COMPLETED' if run.returncode==0 else 'DEFERRED',
+                'exit_code':run.returncode,'receipt':'/var/lib/ziji-fabric/actors/rsc/latest.json'}
+    except subprocess.TimeoutExpired:
+        return {'stage':'RSC_CONTINUATION_CALL','status':'TIMEOUT_RECONCILE_NATIVE_STATE'}
+
 def actor_projection(timeout=240, script_name='project_actor_receipts.py'):
     if script_name not in ('project_actor_receipts.py', 'highlevel_request_queue.py'):
         raise ProbeError('actor_projection_scope')
@@ -293,6 +312,12 @@ if __name__ == '__main__':
         except Exception:
             print('{"stage":"HIGHLEVEL_REQUEST_QUEUE","status":"failed_details_withheld","model_calls":0}')
             failed = True
+        try:
+            if current_collection and current_collection.get('jira',{}).get('status') == 'retrieved_and_persisted':
+                print(json.dumps(rsc_continuation(),sort_keys=True))
+        except Exception:
+            print('{"stage":"RSC_CONTINUATION_CALL","status":"failed_details_withheld"}')
+            failed=True
         try: print(json.dumps(continuation(), sort_keys=True))
         except Exception:
             print('{"stage":"INCOME_CONTINUATION_CALL","status":"failed_details_withheld"}')
