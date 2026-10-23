@@ -125,7 +125,7 @@ def test_replay_after_restart_makes_no_provider_calls(tmp_path, monkeypatch):
         return {"verified":True,"note_ids":["note"],"opportunity_id":None}
     bridge=SimpleNamespace(AUDIT_LOG_PATH=str(tmp_path/"audit.jsonl"),API_KEY="test",append_audit_log=lambda e:None,
         ingestion_operations={"execute":execute,"dry_run":lambda r,k:{
-            "accepted":True,"source_key":"key","note_parts":1,
+            "accepted":True,"source_key":"key","note_parts":1,"missing_configuration":[],
             "contact_effect":"existing_default_contact","opportunity_effect":"none"}})
     monkeypatch.setitem(sys.modules,"app",bridge)
     fresh = {row['id']:dict(row,body=row['body'].strip()) for row in snapshot()['receipt_candidates']}
@@ -211,3 +211,16 @@ def test_out_of_order_provider_capacity_cannot_increase_remaining(tmp_path):
         budget.observe(200,{"X-RateLimit-Daily-Remaining":"8"},now=1800000000)
         budget.observe(200,{"X-RateLimit-Daily-Remaining":"10"},now=1800000001)
     assert budget.status(path,now=1800000001)["provider_daily_remaining"]==8
+
+
+def test_rsc_operational_alias_preserves_existing_binding_and_source_domain(monkeypatch):
+    monkeypatch.setattr(projection.os, 'geteuid', lambda:0)
+    monkeypatch.delenv('HIGHLEVEL_INGEST_RSC_DEFAULT_CONTACT_ID', raising=False)
+    monkeypatch.setenv('HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID', 'verified-internal-context')
+    assert projection.bind_operational_target_alias()['rsc'] == 'shared_existing_internal_context'
+    assert projection.os.environ['HIGHLEVEL_INGEST_RSC_DEFAULT_CONTACT_ID'] == 'verified-internal-context'
+    item = projection.select_receipts(snapshot(), policy())['rsc']
+    assert projection.record(item).domain == 'rsc'
+    monkeypatch.setenv('HIGHLEVEL_INGEST_RSC_DEFAULT_CONTACT_ID', 'existing-rsc-context')
+    projection.bind_operational_target_alias()
+    assert projection.os.environ['HIGHLEVEL_INGEST_RSC_DEFAULT_CONTACT_ID'] == 'existing-rsc-context'

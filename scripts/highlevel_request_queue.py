@@ -244,12 +244,13 @@ def process(snapshot, policy, journal, exact_comment, invoke, publish, now, exec
 
 def run(execute=False):
     require(os.geteuid() == 0, "root_required")
-    from project_actor_receipts import CONFIG, SOURCES, current_snapshot, validate_policy, private_read, atomic
+    from project_actor_receipts import CONFIG, SOURCES, current_snapshot, validate_policy, private_read, atomic, bind_operational_target_alias
     from provider_budget import actor_scope
     sys.path.insert(0, "/opt/ziji-fabric/native")
     from native_jira_receipt import headers, publish
     from bind_native_providers import request, JIRA_ROOT
     from collect_native_sources import text_content
+    target_alias = bind_operational_target_alias()
     import app as bridge
     from ingestion import IngestRecord, IncomeSourceRead, configuration, note_bodies
     now = dt.datetime.now(dt.timezone.utc)
@@ -292,6 +293,7 @@ def run(execute=False):
             return result
 
     report = process(snapshot, policy, journal, exact_comment, invoke, publish, now, execute)
+    report["target_alias"] = target_alias
     if execute:
         atomic(db.parent/"highlevel-request-status.json", report, 0o644)
     return report

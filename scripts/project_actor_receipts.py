@@ -179,6 +179,18 @@ def verify_current(item, policy, read, approval_verified):
     return True
 
 
+def bind_operational_target_alias():
+    """Root script process only: never persist or widen service/customer routes."""
+    if os.geteuid() != 0:
+        raise ValueError('root_required')
+    rsc = 'HIGHLEVEL_INGEST_RSC_DEFAULT_CONTACT_ID'
+    income = 'HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID'
+    if not os.environ.get(rsc) and os.environ.get(income):
+        os.environ[rsc] = os.environ[income]
+        return {'rsc':'shared_existing_internal_context', 'scope':'this_root_operational_process_only'}
+    return {'rsc':'configured_owning_context', 'scope':'this_root_operational_process_only'}
+
+
 def record(item):
     from ingestion import IngestRecord
     actor = item["actor"]
@@ -198,6 +210,7 @@ def run(execute=False, sources=SOURCES, state=STATE, config=CONFIG, read=exact_c
     now = dt.datetime.now(dt.timezone.utc)
     policy = validate_policy(json.loads(private_read(config)))
     selected = select_receipts(current_snapshot(sources, now), policy)
+    target_alias = bind_operational_target_alias()
     import app as bridge
     journal = Path(bridge.AUDIT_LOG_PATH).parent/"ingestion.sqlite3"
     # Validate exact prospective records through existing no-network dry-run.
@@ -206,10 +219,12 @@ def run(execute=False, sources=SOURCES, state=STATE, config=CONFIG, read=exact_c
         preview = bridge.ingestion_operations["dry_run"](record(selected[actor]), bridge.API_KEY)
         manifest.append({"actor":actor, **selected[actor], "accepted":preview["accepted"],
                          "source_key":preview["source_key"], "note_parts":preview["note_parts"],
+                         "missing_configuration":preview["missing_configuration"],
                          "contact_effect":preview["contact_effect"], "opportunity_effect":preview["opportunity_effect"]})
     if not execute:
         return {"stage":"ACTOR_EVIDENCE_PREVIEW", "manifest":manifest,
-                "missing_actors":sorted(ACTORS-set(selected)), "provider_requests":0, "model_calls":0}
+                "missing_actors":sorted(ACTORS-set(selected)), "target_alias":target_alias,
+                "provider_requests":0, "model_calls":0}
     if any(not row['accepted'] or row['contact_effect'] != 'existing_default_contact'
            or row['opportunity_effect'] != 'none' or row['note_parts'] != 1 for row in manifest):
         raise ValueError('projection_manifest_not_accepted')
@@ -259,7 +274,7 @@ def run(execute=False, sources=SOURCES, state=STATE, config=CONFIG, read=exact_c
         results = {actor:{k:v for k,v in row.items() if k != "native_ids"} for actor,row in results.items()}
         report = {"stage":"ACTOR_EVIDENCE_PROJECTION", "observed_at":now.isoformat(), "actors":results,
                   "missing_actors":sorted(ACTORS-set(selected)), "model_calls":0,
-                  "mission_executions":0, "budget":budget_status(journal)}
+                  "mission_executions":0, "target_alias":target_alias, "budget":budget_status(journal)}
         atomic(state/"latest.json", report)
         # Deliberately public-to-local-service sanitized metadata: no source body,
         # issuer IDs, contact IDs, credentials, customer or Calendar information.
