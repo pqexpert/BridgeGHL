@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tempfile
 import urllib.error
@@ -15,8 +16,7 @@ import urllib.parse
 import urllib.request
 
 JIRA_ROOT = 'https://api.atlassian.com/ex/jira/20f21ae4-e364-40df-b5a1-b2512fd862d6'
-KEYS = ('JIRA_API_TOKEN', 'JIRA_EMAIL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOPIFY_SHOP_DOMAIN',
-        'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN')
+KEYS = ('JIRA_API_TOKEN', 'JIRA_EMAIL', 'SHOPIFY_CLIENT_ID', 'SHOPIFY_CLIENT_SECRET', 'SHOPIFY_SHOP_DOMAIN')
 
 class ProbeError(Exception):
     pass
@@ -174,6 +174,29 @@ def google(config, call=request):
         receipt['calendar_event_read'] = 'verified'
     return receipt, binding
 
+def existing_google(base, call=request):
+    """Revalidate shared Calendar identity using only its admitted private binding."""
+    target=base/'google'/'credentials.json'
+    if not target.exists() and not target.is_symlink():raise ProbeError('binding_missing')
+    for path in (base,base/'google',target):
+        st=path.lstat()
+        if path.is_symlink() or st.st_uid!=os.geteuid() or st.st_mode & 0o077:
+            raise ProbeError('existing_binding_permissions_invalid')
+    if not stat.S_ISREG(target.stat().st_mode) or target.stat().st_size>65536:
+        raise ProbeError('existing_binding_invalid')
+    before=target.read_bytes()
+    binding=json.loads(before)
+    if binding.get('expected_email')!='restorationconsultantsoutreach@gmail.com' or not binding.get('calendar_id'):
+        raise ProbeError('existing_google_identity_invalid')
+    config={k:binding.get(v,'') for k,v in (
+        ('GOOGLE_CLIENT_ID','client_id'),('GOOGLE_CLIENT_SECRET','client_secret'),('GOOGLE_REFRESH_TOKEN','refresh_token'))}
+    receipt,verified=google(config,call)
+    if verified!=binding or target.is_symlink() or target.read_bytes()!=before:
+        raise ProbeError('existing_binding_conflict_preserved')
+    receipt.update(binding='already_present_verified',credential_source='existing_shared_google',binding_unchanged=True,
+                   income_google_binding='separate_not_modified')
+    return receipt
+
 def host_inventory():
     import shutil
     services = {}
@@ -212,15 +235,18 @@ def run_server(config, base=Path('/etc/ziji-fabric/providers'), call=request):
     results = {}
     for lane, probe in (('jira', jira), ('google', google)):
         try:
-            receipt, binding = probe(config, call)
-            receipt['binding'] = persist(base, lane, binding)
+            if lane == 'google':
+                receipt = existing_google(base, call)
+            else:
+                receipt, binding = probe(config, call)
+                receipt['binding'] = persist(base, lane, binding)
             results[lane] = receipt
         except ProbeError as e:
             results[lane] = {'status':str(e), 'binding':'not_changed'}
         except Exception:
             results[lane] = {'status':'local_binding_error', 'binding':'inspect_before_retry'}
     results['shopify'] = {'status':'hosted_route_retained_native_deferred', 'binding':'not_changed'}
-    results['google']['github_oauth_bindings_present'] = {k:bool(config.get(k)) for k in KEYS if k.startswith('GOOGLE_')}
+    results['google']['github_drive_candidate_used'] = False
     try:
         host = host_inventory()
     except Exception:

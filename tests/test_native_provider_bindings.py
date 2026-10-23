@@ -110,5 +110,30 @@ class BindingsTest(unittest.TestCase):
             self.assertNotIn('never-log-this',json.dumps(r))
             self.assertNotIn('secret',json.dumps(r))
 
+    def test_existing_calendar_binding_ignores_new_drive_candidate(self):
+        binding={'client_id':'calendar-client','client_secret':'calendar-secret','refresh_token':'calendar-refresh',
+                 'expected_email':'restorationconsultantsoutreach@gmail.com','calendar_id':'woo-id'}
+        candidate={'GOOGLE_CLIENT_ID':'drive-client','GOOGLE_CLIENT_SECRET':'drive-secret','GOOGLE_REFRESH_TOKEN':'drive-refresh'}
+        def call(url,*args,**kw):
+            if 'oauth2' in url:
+                self.assertEqual(kw['body']['client_id'],'calendar-client')
+                self.assertEqual(kw['body']['refresh_token'],'calendar-refresh')
+                return {'access_token':'private-access'}
+            if '/about?' in url:return {'user':{'emailAddress':binding['expected_email']}}
+            if '/events?' in url:return {'items':[]}
+            return {'items':[{'summary':'WooCalendar','accessRole':'owner','id':'woo-id'}]}
+        with tempfile.TemporaryDirectory() as td,patch.object(m,'host_inventory',return_value={}):
+            base=Path(td)/'providers';m.persist(base,'google',binding);m.persist(base,'income-google',{'unchanged':'income'})
+            shared=(base/'google/credentials.json').read_bytes();income=(base/'income-google/credentials.json').read_bytes()
+            result=m.run_server(candidate,base,call)
+            self.assertTrue(result['results']['google']['binding_unchanged'])
+            self.assertFalse(result['results']['google']['github_drive_candidate_used'])
+            self.assertEqual((base/'google/credentials.json').read_bytes(),shared)
+            self.assertEqual((base/'income-google/credentials.json').read_bytes(),income)
+            self.assertNotIn('calendar-secret',json.dumps(result));self.assertNotIn('private-access',json.dumps(result))
+            (base/'google/credentials.json').chmod(0o644)
+            denied=m.run_server(candidate,base,lambda *a,**kw:self.fail('invalid binding must not fall back'))
+            self.assertEqual(denied['results']['google']['status'],'existing_binding_permissions_invalid')
+
 if __name__=='__main__':
     unittest.main()
