@@ -378,7 +378,13 @@ def register_routes(bridge):
                 return reader(record.cursor,record.limit,location_id=bridge.HIGHLEVEL_LOCATION_ID,
                     pipeline_id=cfg['pipeline_id'],stage_id=cfg['stage_id'],
                     default_contact_id=cfg['default_contact_id'],journal_path=path,call=call)
-        except (OSError,ValueError,KeyError,TypeError,sqlite3.Error):
+        except PermissionError:
+            raise HTTPException(409,'income_backlog_permission_denied') from None
+        except FileNotFoundError:
+            raise HTTPException(409,'income_backlog_locator_missing') from None
+        except sqlite3.Error:
+            raise HTTPException(409,'income_backlog_journal_unavailable') from None
+        except (OSError,ValueError,KeyError,TypeError):
             raise HTTPException(409,'income_backlog_source_unavailable') from None
 
     bridge.app.post('/read/ingest/income-backlog')(read_backlog)

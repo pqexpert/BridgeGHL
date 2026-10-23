@@ -39,3 +39,5 @@ This bounded research path does not prove whole Income/RSC mission replacement.
 Resume tailoring, external correspondence, applications, and broader mission
 selection require their own implemented and evidenced routes. No paid model
 fallback exists.
+
+The deployed app receives a root-owned, service-group-readable identifier-only locator (0640). The full import remains root-private. Deployment verifies the actual service identity can read the locator and performs a bounded live source-access check without inference.

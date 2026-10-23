@@ -73,6 +73,49 @@ def manifest(root=ROOT):
         rows.append((sid,row,bindings[sid]))
     return sorted(rows),counts
 
+
+LOCATOR = Path("/home/bridgeadmin/apps/BridgeGHL/config/income-discovery.json")
+
+def discovery_manifest(root=ROOT):
+    doc=json.loads(LOCATOR.read_text())
+    if doc.get("schema") != 1 or not isinstance(doc.get("records"),list) or len(doc["records"])>1000:
+        raise ValueError("locator_shape_invalid")
+    rows=[];seen=set()
+    for row in doc["records"]:
+        if set(row)!={"source_id","contact_id","opportunity_id"} or any(
+                not isinstance(v,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",v) for v in row.values()):
+            raise ValueError("locator_identity_invalid")
+        if row["source_id"] in seen:raise ValueError("locator_duplicate")
+        seen.add(row["source_id"])
+        rows.append((row["source_id"],{},{"contact_id":row["contact_id"],"opportunity_id":row["opportunity_id"]}))
+    return sorted(rows),{}
+
+def install_locator():
+    """Project identifiers only; full import remains root-private."""
+    import os,pwd,grp,subprocess,tempfile
+    if os.geteuid()!=0:raise ValueError("root_required")
+    user=subprocess.check_output(["systemctl","show","bridgeghl.service","-p","User","--value"],text=True).strip() or "root"
+    group=subprocess.check_output(["systemctl","show","bridgeghl.service","-p","Group","--value"],text=True).strip()
+    account=pwd.getpwuid(int(user)) if user.isdigit() else pwd.getpwnam(user)
+    gid=(int(group) if group.isdigit() else grp.getgrnam(group).gr_gid) if group else account.pw_gid
+    rows,_=manifest()
+    records=[{"source_id":sid,"contact_id":binding["contact_id"],"opportunity_id":binding["opportunity_id"]}
+             for sid,_,binding in rows]
+    if LOCATOR.is_symlink() or LOCATOR.parent.is_symlink():raise ValueError("locator_symlink")
+    doc={"schema":1,"records":records}
+    fd,tmp=tempfile.mkstemp(dir=LOCATOR.parent)
+    try:
+        with os.fdopen(fd,"w") as stream:
+            json.dump(doc,stream,sort_keys=True);stream.write("\n");stream.flush();os.fsync(stream.fileno())
+        os.chown(tmp,0,gid);os.chmod(tmp,0o640);os.replace(tmp,LOCATOR)
+    finally:
+        if os.path.exists(tmp):os.unlink(tmp)
+    # Actual service identity must read the projection, without printing IDs.
+    code="import json;from pathlib import Path;d=json.loads(Path("+repr(str(LOCATOR))+").read_text());assert d['schema']==1"
+    subprocess.run(["runuser","-u",account.pw_name,"--","python3","-c",code],check=True,capture_output=True)
+    return {"locator_records":len(records),"service_user":account.pw_name,"locator_mode":"0640",
+            "service_readback":True,"full_private_export_exposed":False}
+
 def binding_diagnosis():
     """Root-only read diagnosis: no secret contents, model calls or writes."""
     import importlib.util,stat,urllib.error
@@ -99,7 +142,13 @@ def binding_diagnosis():
               'bridge_binding_private_file_required','bridge_binding_unavailable','bridge_response_too_large'}
         result.update(status='DEFERRED',stage=stage,error_type=type(exc).__name__)
         if isinstance(exc,ValueError) and str(exc) in safe:result['reason']=str(exc)
-        if isinstance(exc,urllib.error.HTTPError):result['http_status']=exc.code
+        if isinstance(exc,urllib.error.HTTPError):
+            result['http_status']=exc.code
+            try:
+                detail=json.loads(exc.read(2048)).get('detail')
+                if detail in {'income_backlog_permission_denied','income_backlog_locator_missing','income_backlog_journal_unavailable','income_backlog_source_unavailable'}:
+                    result['reason']=detail
+            except (ValueError,TypeError,AttributeError):pass
     return result
 
 def inspect_manifest(root=ROOT):
@@ -122,7 +171,7 @@ def inspect_manifest(root=ROOT):
 def read_backlog(cursor, limit, *, location_id, pipeline_id, stage_id,
                  default_contact_id, journal_path, call, root=ROOT):
     from ingestion import read_income_source, SourceReadError,assemble,source_key,verified_notes
-    rows,counts = manifest(root)
+    rows,counts = discovery_manifest(root)
     if not rows: return {"items":[],"next_cursor":0,"scanned":0,"coverage":"verified_import_manifest_only"}
     start = cursor % len(rows)
     scan = [rows[(start+i)%len(rows)] for i in range(min(limit,len(rows)))]

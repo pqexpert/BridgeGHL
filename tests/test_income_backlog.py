@@ -32,7 +32,7 @@ def test_historical_missing_flag_does_not_hide_current_native_eligibility():
         calls.append(path)
         if path.endswith("/notes"):return {"notes":[]}
         return {"opportunity":{"status":"open","pipelineStageId":"intake","updatedAt":"current"}}
-    with patch.object(b,"manifest",return_value=([(sid,{"Do Not Auto Submit":None},binding)],{})), \
+    with patch.object(b,"discovery_manifest",return_value=([(sid,{"Do Not Auto Submit":None},binding)],{})), \
          patch("ingestion.verified_notes",return_value={}), \
          patch("ingestion.assemble",return_value={"b"*64:{"source":current}}), \
          patch("ingestion.read_income_source",return_value=readback):
