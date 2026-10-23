@@ -17,6 +17,12 @@ def install(payload):
     cron = Path("/etc/cron.d/ziji-fabric-native-sources")
     if not cron.is_file() or "11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron" not in cron.read_text():
         raise ValueError("existing_hourly_cadence_required")
+    old_comment = "# Native read-only evidence; no model or provider writes."
+    new_comment = "# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence."
+    cron_text = cron.read_text()
+    expected_line = "11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n"
+    if cron_text not in (old_comment+"\n"+expected_line, new_comment+"\n"+expected_line):
+        raise ValueError("existing_cron_conflict_preserved")
     root = Path("/opt/ziji-fabric/dispatch/continuation")
     state = Path("/var/lib/ziji-fabric/dispatch/continuation")
     cfg = Path("/etc/ziji-fabric/dispatch")
@@ -26,8 +32,9 @@ def install(payload):
         path.chmod(0o700)
     scope = {"__name__":"continuation_validation"}
     exec(compile(bundle["controller"], "income_continuation.py", "exec"), scope)
-    queue = payload["queue"]
-    if queue.get("version") != 1 or not isinstance(queue.get("items"), list) or not 1 <= len(queue["items"]) <= 32:
+    refresh = payload.get("mode") == "continuation-refresh"
+    queue = {"version":1,"items":[]} if refresh else payload["queue"]
+    if queue.get("version") != 1 or not isinstance(queue.get("items"), list) or not (0 if refresh else 1) <= len(queue["items"]) <= 32:
         raise ValueError("invalid_queue")
     now = dt.datetime.now(dt.timezone.utc)
     for item in queue["items"]:
@@ -45,10 +52,42 @@ def install(payload):
         fcntl.flock(control, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with Path("/var/lib/ziji-fabric/income/unit.lock").open("a") as native:
             fcntl.flock(native, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if refresh and not destination.is_file():raise ValueError("existing_queue_required")
             previous = scope["read"](destination) if destination.exists() else {"version":1,"items":[]}
             items = {scope["identity"](e["intake"]):e for e in previous["items"]}
             items.update({scope["identity"](e["intake"]):e for e in queue["items"]})
             if len(items) > 32: raise ValueError("queue_capacity")
+            if cron.read_text() != cron_text:
+                raise ValueError("existing_cron_conflict_preserved")
+            if collector.is_symlink() or hashlib.sha256(collector.read_bytes()).hexdigest() not in (bundle["collector_previous_sha256"],bundle["hashes"]["collector"]):
+                raise ValueError("collector_changed_preserved")
+            admission_config = payload.get("admission_config")
+            config_state = "UNCHANGED"
+            admission_path = cfg / "income-admission.json"
+            if admission_config is not None:
+                expected_fields = {"enabled","issuer_account_id","authority_ref","authority_comment_updated","drive_folder"}
+                if (not isinstance(admission_config,dict) or set(admission_config) != expected_fields
+                        or admission_config["enabled"] is not True
+                        or not isinstance(admission_config["issuer_account_id"],str)
+                        or not 1 <= len(admission_config["issuer_account_id"]) <= 200
+                        or admission_config["authority_ref"] != "RBO-97:12086"
+                        or admission_config["drive_folder"] != "1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE"):
+                    raise ValueError("admission_config_scope")
+                try:
+                    stamp = dt.datetime.fromisoformat(admission_config["authority_comment_updated"].replace("Z","+00:00"))
+                    if stamp.tzinfo is None:raise ValueError("aware_timestamp_required")
+                except (ValueError,TypeError,AttributeError):
+                    raise ValueError("admission_config_authority_version") from None
+                scope["validate_policy"](admission_config)
+                if admission_path.is_symlink():raise ValueError("admission_config_conflict_preserved")
+                if admission_path.exists():
+                    if admission_path.stat().st_uid != 0 or scope["read"](admission_path) != admission_config:
+                        raise ValueError("admission_config_conflict_preserved")
+                    config_state = "IDENTICAL"
+                else:
+                    atomic(admission_path,json.dumps(admission_config,sort_keys=True))
+                    if scope["read"](admission_path) != admission_config:raise ValueError("admission_config_readback")
+                    config_state = "INITIALIZED"
             sources = {root / "income_continuation.py":bundle["controller"],
                        Path("/opt/ziji-fabric/income/career_unit.py"):bundle["runtime"],
                        collector:bundle["collector"]}
@@ -56,11 +95,13 @@ def install(payload):
                 if path.is_symlink(): raise ValueError("source_symlink")
                 atomic(path, source)
                 if path.read_text() != source: raise ValueError("continuation_source_readback")
-            atomic(destination, json.dumps({"version":1,"items":list(items.values())},sort_keys=True))
+            atomic(cron, new_comment+"\n"+expected_line, 0o644)
+            if not refresh:
+                atomic(destination, json.dumps({"version":1,"items":list(items.values())},sort_keys=True))
             verified = scope["read"](destination)
             if len(verified["items"]) != len(items): raise ValueError("queue_readback")
             receipt = {"stage":"INCOME_CONTINUATION_INSTALL","outcome":"STAGED",
-                       "source_readback":True,"queue_items":len(items),"source_pins":bundle["pins"],
+                       "source_readback":True,"admission_config":config_state,"queue_unchanged":refresh,"queue_items":len(items),"source_pins":bundle["pins"],
                        "installed_at":now.isoformat(),"existing_cadence":"hourly_at_minute_11",
                        "new_scheduler":False,"model_calls":0,"jobs_executed":0,
                        "paid_fallback":False,"daily_model_limit":1,
@@ -69,7 +110,7 @@ def install(payload):
             return receipt
 
 
-def observe(wake=False):
+def observe(bundle, wake=False):
     """Pure local status; wake explicitly runs one admitted useful controller pass."""
     if os.geteuid() != 0: raise ValueError("root_required")
     from collect_native_sources import continuation
@@ -81,31 +122,49 @@ def observe(wake=False):
         value = json.loads(path.read_text())
         if not isinstance(value, dict): raise ValueError("status_object_required")
         return value
-    if wake:
-        if not (state / "installation.json").is_file(): raise ValueError("continuation_not_installed")
-        continuation(timeout=240)
     installed = load(state / "installation.json")
-    ledger = load(state / "state.json")
-    latest = load(state / "latest.json")
-    caller = load(state / "caller-latest.json")
-    queue = load(Path("/etc/ziji-fabric/dispatch/income-queue.json"))
-    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-    units = ledger.get("units", {})
-    receipt = latest.get("receipt", {})
     files = {"controller":"/opt/ziji-fabric/dispatch/continuation/income_continuation.py",
              "runtime":"/opt/ziji-fabric/income/career_unit.py",
              "collector":"/opt/ziji-fabric/native/collect_native_sources.py"}
     hashes = {}
     for name, filename in files.items():
         path = Path(filename)
-        if path.exists():
-            if path.is_symlink() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
-                raise ValueError("installed_source_permissions")
+        if path.is_file() and not path.is_symlink() and path.stat().st_uid == 0 and not path.stat().st_mode & 0o022:
             hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    validated = bool(installed) and all(hashes.get(name) == bundle["hashes"][name] for name in files)
+    caller = load(state / "caller-latest.json")
+    if wake:
+        if validated:
+            caller = continuation(timeout=240) or {"status":"WORKER_MISSING"}
+        else:
+            caller = {"status":"INSTALLATION_NOT_VALIDATED"}
+    ledger = load(state / "state.json")
+    latest = load(state / "latest.json")
+    queue = load(Path("/etc/ziji-fabric/dispatch/income-queue.json"))
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    units = ledger.get("units", {})
+    queue_ids = {hashlib.sha256(json.dumps([entry["intake"][k] for k in
+                 ("tracker_url","packet_id","job_id")],separators=(",",":")).encode()).hexdigest()
+                 for entry in queue.get("items", [])}
+    current = False
+    if caller.get("status") == "COMPLETED" and caller.get("exit_code") == 0:
+        try:
+            stamps = [dt.datetime.fromisoformat(value.replace("Z","+00:00")) for value in
+                      (caller["started_at"],latest["observed_at"],caller["observed_at"])]
+            current = (all(stamp.tzinfo is not None for stamp in stamps) and stamps[0] <= stamps[1] <= stamps[2]
+                       and caller.get("result_sha256") == hashlib.sha256(json.dumps(latest,sort_keys=True).encode()).hexdigest())
+        except (KeyError,ValueError,TypeError):
+            pass
+    if not current:
+        latest = {"status":caller.get("status","UNKNOWN"),"reason":"current_pass_evidence_unavailable"}
+        if caller.get("status") == "COMPLETED":latest["status"] = "STALE_EVIDENCE"
+    receipt = latest.get("receipt", {})
     return {"stage":"INCOME_CONTINUATION_STATUS", "read_only":not wake,
             "wake_requested":wake, "observed_at":dt.datetime.now(dt.timezone.utc).isoformat(),
-            "paused":(state / "pause").exists(), "installed":bool(installed),
+            "paused":(state / "pause").exists(), "configured":bool(installed), "installed":validated,
+            "current_pass_verified":current, "wake_ok":current if wake else None,
             "source_pins":installed.get("source_pins"), "installed_sha256":hashes,
+            "cron_description":Path("/etc/cron.d/ziji-fabric-native-sources").read_text().splitlines()[0],
             "queue_items":len(queue.get("items", [])),
             "completed_units":sum(x.get("status") == "VERIFIED" for x in units.values()),
             "completed_receipts":[{"unit":key,"artifact_sha256":unit.get("result",{}).get("artifact_sha256"),
@@ -113,11 +172,11 @@ def observe(wake=False):
                 "native_readback":unit.get("result",{}).get("receipt",{}).get("native_readback",False),
                 "canonical_writeback":unit.get("result",{}).get("canonical_writeback")}
                 for key,unit in units.items() if unit.get("status")=="VERIFIED"],
-            "unfinished_units":sum(x.get("status") != "VERIFIED" for x in units.values()),
+            "unfinished_units":sum(units.get(key,{}).get("status") != "VERIFIED" for key in queue_ids),
             "daily_model_budget_reserved":today in ledger.get("model_days", {}),
             "latest":{k:latest[k] for k in ("status","reason","phase","observed_at",
                        "artifact_sha256","canonical_writeback") if k in latest},
-            "caller":{k:caller[k] for k in ("status","exit_code","observed_at") if k in caller},
+            "caller":{k:caller[k] for k in ("status","exit_code","started_at","observed_at") if k in caller},
             "jira_comment_id":receipt.get("comment_id"),
             "native_receipt_readback":receipt.get("native_readback", False),
             "paid_fallback":False, "submitted":0, "contacted":0}

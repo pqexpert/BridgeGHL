@@ -4,7 +4,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [inspect, execute, candidate, resume, continuation, continuation-status, continuation-wake]
+        options: [inspect, execute, candidate, resume, continuation, continuation-refresh, continuation-status, continuation-wake]
         default: inspect
         description: Inspect state, probe updated OAuth candidate, or execute admitted unit
   push:
@@ -70,6 +70,7 @@ jobs:
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
           INCOME_MODE: ${{ inputs.mode || 'inspect' }}
           INCOME_CONTINUATION_QUEUE_JSON: ${{ secrets.INCOME_CONTINUATION_QUEUE_JSON }}
+          INCOME_ADMISSION_CONFIG_JSON: ${{ secrets.INCOME_ADMISSION_CONFIG_JSON }}
           INCOME_NATIVE_INTAKE_JSON: ${{ secrets.INCOME_NATIVE_INTAKE_JSON }}
           INCOME_CANONICAL_REVALIDATION_JSON: ${{ secrets.INCOME_CANONICAL_REVALIDATION_JSON }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}

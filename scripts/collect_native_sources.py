@@ -61,7 +61,7 @@ def jira_snapshot(cfg, call=request):
         not isinstance(identity.get('emailAddress'), str) or
         identity['emailAddress'].lower() != cfg['email'].lower()):
         raise ProbeError('jira_identity_mismatch')
-    comments, start = [], 0
+    comments, admissions, start = [], [], 0
     for _ in range(100):
         page = call(cfg['base_url'] + '/rest/api/3/issue/RBO-97/comment?' + urllib.parse.urlencode(
             {'startAt':start, 'maxResults':100, 'orderBy':'created'}), headers)
@@ -70,12 +70,22 @@ def jira_snapshot(cfg, call=request):
             raise ProbeError('jira_pagination_invalid')
         for row in rows:
             body = text_content(row.get('body', {}))
+            admission_body = body.strip()
+            if admission_body == 'FABRIC_INCOME_ADMISSION' or admission_body.startswith('FABRIC_INCOME_ADMISSION\n'):
+                author = row.get('author', {}).get('accountId')
+                updater = row.get('updateAuthor', {}).get('accountId')
+                if 'updateAuthor' not in row and row.get('created') == row.get('updated'):
+                    updater = author
+                admissions.append({'id':row['id'], 'created':row['created'], 'updated':row['updated'],
+                                   'author_account_id':author, 'update_author_account_id':updater,
+                                   'body':admission_body})
             if any(marker in body for marker in ('FABRIC_RUN', 'FABRIC_FINDING', 'FABRIC_CHECKPOINT', 'FABRIC_HANDOFF', 'FABRIC_CALENDAR_FEEDBACK_BASELINE')):
                 comments.append({'id':row['id'], 'created':row['created'], 'updated':row['updated'],
                                  'body':body, 'reference':'https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId='+row['id']})
         start += len(rows)
         if start >= page['total']:
             return {'coverage':'all_issue_comments', 'comments_scanned':start, 'receipt_candidates':comments,
+                    'income_admission_candidates':admissions,
                     'source_verified':True, 'actor_execution_verified':False}
         if not rows:
             raise ProbeError('jira_pagination_incomplete')
@@ -177,9 +187,10 @@ def install(source, binding_source):
         raise ProbeError('installation_boundary_invalid')
     ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
     ROOT.chmod(0o700)
-    cron = '# Native read-only evidence; no model or provider writes.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
+    cron = '# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
     legacy_cron = cron.replace(' --trigger cron', '')
-    if CRON.exists() and CRON.read_text() not in (cron, legacy_cron):
+    old_cron = cron.replace('Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence.', 'Native read-only evidence; no model or provider writes.')
+    if CRON.exists() and CRON.read_text() not in (cron, legacy_cron, old_cron, old_cron.replace(' --trigger cron', '')):
         raise ProbeError('existing_cron_conflict_preserved')
     atomic(ROOT/'bind_native_providers.py',binding_source)
     atomic(ROOT/'collect_native_sources.py',source)
@@ -198,13 +209,24 @@ def continuation(timeout=300):
     if not worker.exists(): return
     if worker.is_symlink() or worker.stat().st_uid != 0 or worker.stat().st_mode & 0o022:
         raise ProbeError('continuation_source_permissions')
+    started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
-        run = subprocess.run(['/usr/bin/python3', str(worker)], stdout=subprocess.DEVNULL,
+        run = subprocess.run(['/usr/bin/python3', str(worker)], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, timeout=timeout)
         result = {'stage':'INCOME_CONTINUATION_CALL', 'exit_code':run.returncode,
+                  'status':'COMPLETED' if run.returncode == 0 else 'FAILED',
                   'receipt':'/var/lib/ziji-fabric/dispatch/continuation/latest.json'}
+        if run.returncode == 0:
+            try:
+                if len(run.stdout) > 1048576:raise ValueError('worker_output_limit')
+                actual = json.loads(run.stdout)
+                if not isinstance(actual, dict):raise ValueError('worker_object_required')
+                result['result_sha256'] = hashlib.sha256(json.dumps(actual, sort_keys=True).encode()).hexdigest()
+            except (ValueError,TypeError):
+                result['status'] = 'NO_CURRENT_RESULT'
     except subprocess.TimeoutExpired:
         result = {'stage':'INCOME_CONTINUATION_CALL', 'status':'TIMEOUT_RECONCILE_NATIVE_STATE'}
+    result['started_at'] = started_at
     result['observed_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
     atomic(Path('/var/lib/ziji-fabric/dispatch/continuation/caller-latest.json'), json.dumps(result, sort_keys=True))
     return result

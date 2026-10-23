@@ -16,14 +16,14 @@ def _server(payload):
         scope={"__name__":"income_inspection"}
         exec(compile(payload["inspector"],"income_inspection.py","exec"),scope)
         return scope["inspect"]()
-    if payload.get("mode") in {"continuation", "continuation-status", "continuation-wake"}:
+    if payload.get("mode") in {"continuation", "continuation-refresh", "continuation-status", "continuation-wake"}:
         if hashlib.sha256(payload["installer"].encode()).hexdigest() != payload["continuation"]["hashes"]["installer"]:
             raise ValueError("installer_hash_mismatch")
         sys.path.insert(0,"/opt/ziji-fabric/native")
         scope={"__name__":"continuation_install"}
         exec(compile(payload["installer"],"install_income_continuation.py","exec"),scope)
-        if payload["mode"] == "continuation": return scope["install"](payload)
-        return scope["observe"](wake=payload["mode"] == "continuation-wake")
+        if payload["mode"] in {"continuation", "continuation-refresh"}: return scope["install"](payload)
+        return scope["observe"](payload["continuation"], wake=payload["mode"] == "continuation-wake")
     source=payload["runtime"]
     if hashlib.sha256(source.encode()).hexdigest()!=payload["sha256"]:raise ValueError("runtime_hash")
     sys.path.insert(0,"/opt/ziji-fabric/native")
@@ -99,13 +99,15 @@ def deploy():
     sha=hashlib.sha256(runtime.encode()).hexdigest()
     if manifest!={"source_commit":PIN,"sha256":sha}:raise ValueError("runtime_pin")
     mode=os.environ.get("INCOME_MODE","inspect")
-    if mode not in {"inspect","execute","resume","continuation","continuation-status","continuation-wake"}:raise ValueError("invalid_mode")
+    if mode not in {"inspect","execute","resume","continuation","continuation-refresh","continuation-status","continuation-wake"}:raise ValueError("invalid_mode")
     payload={"source":here.read_text(),"runtime":runtime,"sha256":sha,"mode":mode,
              "inspector":here.with_name("inspect_income_native.py").read_text()}
     if mode.startswith("continuation"):
         payload["installer"]=here.with_name("install_income_continuation.py").read_text()
         payload["continuation"]=json.loads(here.with_name("income_continuation_bundle.json").read_text())
         if mode=="continuation": payload["queue"]=json.loads(os.environ["INCOME_CONTINUATION_QUEUE_JSON"])
+        if mode in {"continuation","continuation-refresh"} and os.environ.get("INCOME_ADMISSION_CONFIG_JSON"):
+            payload["admission_config"]=json.loads(os.environ["INCOME_ADMISSION_CONFIG_JSON"])
     if mode=="execute":payload["intake"]=json.loads(os.environ["INCOME_NATIVE_INTAKE_JSON"])
     if mode=="resume":
         payload["credentials"]={k:os.environ[k] for k in ("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN")}
@@ -119,8 +121,9 @@ def deploy():
     print(json.dumps(report,sort_keys=True))
     if mode in {"continuation-status", "continuation-wake"}:
         if report.get("stage") != "INCOME_CONTINUATION_STATUS": raise ValueError("continuation_status_failed")
+        if mode == "continuation-wake" and report.get("wake_ok") is not True: raise ValueError("continuation_wake_not_verified")
         return
-    if mode=="continuation":
+    if mode in {"continuation","continuation-refresh"}:
         if report.get("outcome")!="STAGED" or report.get("source_readback") is not True: raise ValueError("continuation_install_failed")
         return
     if mode=="inspect":

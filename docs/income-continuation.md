@@ -18,3 +18,13 @@ Only fresh, explicitly admitted canonical projections execute, for at most 36 ho
 The useful initial candidate is the existing unfinished PingWind support research packet. It remains unqualified, not packet-ready and Do Not Auto Submit; this path makes no applications, external messages, Calendar writes, paid-model fallbacks or candidate eligibility claims. Actual result belongs in the deployment/native receipt, not this source document.
 
 Existing encrypted VPS recovery includes the queue and ledgers under /etc and /var/lib, plus installed code under /opt. Local pause drop-ins can be recreated by the reviewed Git-backed control script; the local capsule is not a full-machine image. VS Code tasks expose existing status plus local pause/resume.
+
+## Source refresh and truthful status
+
+`continuation-refresh` updates the pinned worker/runtime/collector and the existing cron description under both worker locks. It reads the existing private queue without rewriting it, does not refresh any admission or expiry, and runs no job. Expired or completed entries can remain intact during source maintenance. Unexpected collector content or cron edits fail before source replacement.
+
+Status distinguishes a historical `configured` installation record from `installed`, which requires every expected deployed source hash and safe permissions. `unfinished_units` joins current queue identities to the ledger; historical completed receipts remain available separately. The actual cron description is included.
+
+A requested wake accepts current evidence only when the worker exits successfully and its own JSON output hash equals a `latest.json` observed between that invocation's start and finish. Timeout, nonzero exit, missing output (including lock contention), or stale evidence cannot reuse an old top-level Jira success. Completed historical receipts remain visible for reconciliation. No extra inference is performed to validate status.
+
+The collector projects only dedicated `FABRIC_INCOME_ADMISSION` comments into a separate private candidate list with author/update-author identity and source timestamps. Malformed or revoked records are retained for rejection/reconciliation by the governed controller; incidental prose is not an admission. This collection does not grant authority.
