@@ -34,7 +34,7 @@ def health():
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self,*args,**kwargs):return None
         req=urllib.request.Request("http://127.0.0.1:18181/health",headers={"Authorization":"Bearer "+key})
-        with urllib.request.build_opener(NoRedirect).open(req,timeout=3) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect).open(req,timeout=3) as response:
             value=json.loads(response.read(4096))
             return "READY" if response.status==200 and value.get("status")=="ok" else "NOT_READY"
     except Exception:return "UNAVAILABLE"
