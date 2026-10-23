@@ -132,6 +132,8 @@ class BridgeHealthResponse(BaseModel):
     approved_contact_tag_count: int
     last_checked_at: str
     checks: list[dict]
+    actor_operational_projection: dict = Field(default_factory=dict)
+    highlevel_requests: dict = Field(default_factory=dict)
 
 
 def require_api_key(x_api_key: Optional[str]):
@@ -289,7 +291,7 @@ def highlevel_headers(redacted: bool = False) -> dict:
     }
 
 
-def highlevel_request(
+def _highlevel_request(
     method: str,
     url: str,
     *,
@@ -303,6 +305,18 @@ def highlevel_request(
     if not HIGHLEVEL_LOCATION_ID:
         raise HTTPException(status_code=500, detail="HIGHLEVEL_LOCATION_ID is not configured")
 
+    from provider_budget import reserve, observe, BudgetDeferred
+    try:
+        counted = reserve()
+    except BudgetDeferred as exc:
+        if str(exc) == 'request_burst_budget' and exc.retry_after is not None and exc.retry_after <= 10:
+            time.sleep(exc.retry_after + 0.01)  # No network retry; reservation precedes the first attempt.
+            try:
+                counted = reserve()
+            except BudgetDeferred as deferred:
+                raise HTTPException(429, str(deferred)) from None
+        else:
+            raise HTTPException(429, str(exc)) from None
     response = requests.request(
         method,
         url,
@@ -312,15 +326,28 @@ def highlevel_request(
         timeout=timeout,
     )
     # A transient provider read rejection must not replay a mutation.
-    if retry_reads and method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
+    if retry_reads and not counted and method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
         time.sleep(2)
         response = requests.request(method, url, headers=highlevel_headers(),
                                     json=body, params=params, timeout=timeout)
+    if counted:
+        observe(response.status_code, response.headers)
     try:
         data = response.json()
     except ValueError:
         data = {"raw_text": response.text}
     return response.status_code, data
+
+
+def highlevel_request(method: str, url: str, *, body=None, params=None, timeout=30, retry_reads=True):
+    # Legacy bridge routes are RSC-scoped; typed Income routes and the private
+    # root projector supply narrower trusted contexts. Clients cannot set this.
+    from provider_budget import CURRENT, actor_scope
+    if CURRENT.get() is not None:
+        return _highlevel_request(method, url, body=body, params=params, timeout=timeout, retry_reads=False)
+    from pathlib import Path
+    with actor_scope('rsc', Path(AUDIT_LOG_PATH).parent / 'ingestion.sqlite3'):
+        return _highlevel_request(method, url, body=body, params=params, timeout=timeout, retry_reads=False)
 
 
 def opportunity_endpoint(opportunity_id: str) -> str:
@@ -538,6 +565,48 @@ def verify_task_identity(projected: dict, payload: TaskDeleteRequest) -> dict:
     return {"ok": all(check["ok"] for check in checks), "checks": checks}
 
 
+def highlevel_request_status():
+    from pathlib import Path
+    path = Path(AUDIT_LOG_PATH).parent / 'highlevel-request-status.json'
+    try:
+        if path.is_symlink() or path.stat().st_size > 1048576:
+            raise ValueError('status_bounds')
+        value = json.loads(path.read_text())
+        fields = ('request_id','lane','operation','request_comment_id','request_sha256',
+                  'status','native_readback_at','cached')
+        rows = []
+        for row in value.get('requests',[])[:100]:
+            item = {k:row[k] for k in fields if k in row}
+            receipt = row.get('receipt') or {}
+            if isinstance(receipt,dict):
+                item['receipt'] = {k:receipt[k] for k in ('status','comment_id','native_readback') if k in receipt}
+            rows.append(item)
+        return {'source':'cached_request_delivery','observed_at':value.get('observed_at'),
+                'current_provider_read':False,'requests':rows}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {'source':'cached_request_delivery','status':'UNAVAILABLE','current_provider_read':False}
+
+
+def operational_projection_status():
+    # Cached delivery metadata only. Never implies current provider/mission truth.
+    from pathlib import Path
+    path = Path(AUDIT_LOG_PATH).parent / 'actor-projection-status.json'
+    try:
+        if path.is_symlink() or path.stat().st_size > 65536:
+            raise ValueError('status_bounds')
+        value = json.loads(path.read_text())
+        keys = ('status','source_receipt_id','source_body_sha256','source_updated_at',
+                'source_reported_outcome','source_kind','native_readback_at','delivery')
+        actors = {actor:{k:row[k] for k in keys if k in row}
+                  for actor,row in value.get('actors',{}).items()
+                  if actor in {'income','rsc','store','distiller'} and isinstance(row,dict)}
+        from provider_budget import status
+        return {'source':'cached_operational_delivery', 'observed_at':value.get('observed_at'),
+                'current_provider_read':False, 'actors':actors, 'budget':status(path.parent/'ingestion.sqlite3')}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {'source':'cached_operational_delivery', 'status':'UNAVAILABLE', 'current_provider_read':False}
+
+
 def bridge_health_snapshot() -> BridgeHealthResponse:
     checks: list[dict] = []
     configured = {
@@ -608,6 +677,8 @@ def bridge_health_snapshot() -> BridgeHealthResponse:
         approved_contact_tag_count=len(APPROVED_CONTACT_TAGS),
         last_checked_at=datetime.now(timezone.utc).isoformat(),
         checks=checks,
+        actor_operational_projection=operational_projection_status(),
+        highlevel_requests=highlevel_request_status(),
     )
 
 
@@ -1328,7 +1399,7 @@ def execute_task_delete(
 # Source imports are separately enabled and remain inside this bridge's boundary.
 import sys
 from ingestion import register_routes
-register_routes(sys.modules[__name__])
+ingestion_operations = register_routes(sys.modules[__name__])
 
 # Existing bridge credential and location boundary, read-only evidence surface.
 from journey_evidence import register_routes as register_evidence_routes
