@@ -278,6 +278,25 @@ def execute_source_record(
     }, timeout=150)
 
 
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+def read_income_source(
+    source_id: Annotated[str, Field(min_length=1, max_length=200)],
+    contact_id: Annotated[str, Field(min_length=1, max_length=128)],
+    opportunity_id: Annotated[str | None, Field(max_length=128)] = None,
+    current_source_sha256: Annotated[str | None, Field(min_length=64, max_length=64)] = None,
+) -> dict:
+    """Read an existing Income HighLevel source with journal, scope and digest proof.
+
+    No writes or inference. Multiple verified source versions require the exact
+    selected content digest; never guess newest. Historical source URLs remain
+    provenance. Explicit admission data is returned without granting execution.
+    """
+    return _call('/read/ingest/income-source', {
+        'source_id':source_id, 'contact_id':contact_id,
+        'opportunity_id':opportunity_id, 'current_source_sha256':current_source_sha256,
+    })
+
+
 if __name__ == "__main__":
     # Only the VPS loopback can reach this service; connect externally through
     # an authenticated tunnel, after validating its access controls.
