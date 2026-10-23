@@ -60,6 +60,29 @@ def select(config, board):
         raise ValueError("role_geography_changed")
     return {k:job.get(k) for k in ("id","title","jobUrl","applyUrl","location","employmentType","descriptionPlain","publishedAt")}
 
+def select_lever(config, posting):
+    """Validate the exact employer posting; never infer candidate eligibility."""
+    expected="https://jobs.lever.co/"+config["board"]+"/"+config["job_id"]
+    if (posting.get("id")!=config["job_id"] or posting.get("text")!=config["title"]
+            or posting.get("hostedUrl")!=expected or posting.get("applyUrl")!=expected+"/apply"):
+        raise ValueError("role_identity_mismatch")
+    if posting.get("workplaceType")!="remote" or posting.get("country")!="US":
+        raise ValueError("role_geography_changed")
+    description=posting.get("descriptionPlain")
+    if not isinstance(description,str) or not description.strip():
+        raise ValueError("incomplete_posting")
+    # Preserve additional employer sections as source data, including list markup.
+    sections=[description]
+    for section in posting.get("lists",[]):
+        sections.extend([section.get("text", ""),section.get("content", "")])
+    sections.append(posting.get("additionalPlain") or "")
+    categories=posting.get("categories",{})
+    return {"id":posting["id"],"title":posting["text"],"jobUrl":expected,
+            "applyUrl":posting["applyUrl"],"location":categories.get("location"),
+            "employmentType":categories.get("commitment"),
+            "descriptionPlain":"\n\n".join(part for part in sections if part),
+            "publishedAt":posting.get("createdAt")}
+
 def body_for(config, job, proposal, observed):
     # Employer facts are verbatim data. Model text is explicitly a non-authoritative draft.
     return ("# "+config["packet_id"]+" — Source-bound opportunity preparation\n\n"
@@ -129,6 +152,8 @@ def execute(config, resume_context=None):
     if not re.fullmatch(r"[A-Za-z0-9-]{1,100}",config["packet_id"]):raise ValueError("packet_id_invalid")
     if not re.fullmatch(r"[a-z0-9-]{1,60}",config["board"]):raise ValueError("board_invalid")
     if not re.fullmatch(r"[a-f0-9-]{36}",config["job_id"]):raise ValueError("job_id_invalid")
+    provider=config.get("provider","ashby")
+    if provider not in ("ashby","lever"):raise ValueError("provider_invalid")
     now=datetime.now(timezone.utc)
     seen=datetime.fromisoformat(config["observed_at"].replace("Z","+00:00"))
     if resume_context is None:
@@ -140,11 +165,22 @@ def execute(config, resume_context=None):
         checked=datetime.fromisoformat(resume_context["checked_at"].replace("Z","+00:00"))
         if not 0 <= (now-checked).total_seconds() <= 3600 or not resume_context.get("tracker_version"):
             raise ValueError("resume_canonical_refresh_required")
-    board=http("https://api.ashbyhq.com/posting-api/job-board/"+config["board"])
-    job=select(config,board)
+    if provider=="lever":
+        try:
+            posting=http("https://api.lever.co/v0/postings/"+config["board"]+"/"+config["job_id"]+"?mode=json")
+        except ValueError as exc:
+            if str(exc)!="provider_http_404":raise
+            job=None
+        else:
+            job=select_lever(config,posting)
+    else:
+        board=http("https://api.ashbyhq.com/posting-api/job-board/"+config["board"])
+        job=select(config,board)
     if job is None:
         return {"outcome":"BLOCKED","reason":"exact_role_not_currently_listed","closed_claim":False,"submissions":0}
-    key=sha(encoded({"config":{k:config[k] for k in ("board","job_id","packet_id","tracker_url","tracker_version","drive_folder")},"job":job}))
+    key_config={k:config[k] for k in ("board","job_id","packet_id","tracker_url","tracker_version","drive_folder")}
+    if provider=="lever":key_config["provider"]="lever" # retain every existing Ashby key
+    key=sha(encoded({"config":key_config,"job":job}))
     statefile=STATE/("unit-"+key+".json")
     item=private(statefile) if statefile.exists() else {"key":key,"source_sha256":sha(encoded(job)),"observed_at":now.isoformat()}
     if item.get("phase")=="VERIFIED":return {**{k:v for k,v in item.items() if k!="proposal"},"replay":True}
