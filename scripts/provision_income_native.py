@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-PIN = "d3efba1815d1a3f67cfba2e986d9afbfa5532758"
+PIN = "97c151a29a8f31564ccae648d97bec1ce1c5b302"
 
 def _server(payload):
     import sys
@@ -28,22 +28,49 @@ def _server(payload):
         path.mkdir(parents=True,exist_ok=True,mode=0o700)
         path.chmod(0o700)
     native.atomic(root/"career_unit.py",source)
-    cfg=payload["intake"]
-    native.atomic(cfgdir/"intake.json",json.dumps(cfg,sort_keys=True))
+    resume=payload.get("mode")=="resume"
+    shared=Path("/etc/ziji-fabric/providers/google/credentials.json")
+    shared_digest=hashlib.sha256(shared.read_bytes()).hexdigest() if resume else None
+    if resume:
+        inspector={"__name__":"income_candidate"}
+        exec(compile(payload["inspector"],"income_inspection.py","exec"),inspector)
+        candidate=inspector["candidate"](payload["credentials"])
+        if candidate.get("outcome")!="READY_FOR_REVIEW":
+            return {"stage":"INCOME_NATIVE_UNIT","outcome":"BLOCKED","candidate":candidate,"shared_binding_unchanged":True}
+        from bind_native_providers import persist
+        c=payload["credentials"]
+        binding={"client_id":c["GOOGLE_CLIENT_ID"],"client_secret":c["GOOGLE_CLIENT_SECRET"],
+                 "refresh_token":c["GOOGLE_REFRESH_TOKEN"],"expected_email":"restorationconsultantsoutreach@gmail.com"}
+        installed=persist(Path("/etc/ziji-fabric/providers"),"income-google",binding)
+        isolated=Path("/etc/ziji-fabric/providers/income-google/credentials.json")
+        if json.loads(isolated.read_text())!=binding:raise ValueError("income_binding_readback")
+        if hashlib.sha256(shared.read_bytes()).hexdigest()!=shared_digest:raise ValueError("shared_binding_changed")
+        cfgpath=cfgdir/"intake.json"
+        if cfgpath.is_symlink() or cfgpath.stat().st_mode & 0o077:raise ValueError("intake_private_required")
+        cfg=json.loads(cfgpath.read_text())
+    else:
+        cfg=payload["intake"]
+        native.atomic(cfgdir/"intake.json",json.dumps(cfg,sort_keys=True))
     scope={"__name__":"native_income"}
     exec(compile(source,str(root/"career_unit.py"),"exec"),scope)
     lockfd=os.open(state/"unit.lock",os.O_CREAT|os.O_RDWR,0o600)
     with os.fdopen(lockfd,"w") as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
-        report=scope["execute"](cfg)
+        if resume:
+            report=scope["resume_cached"](cfg,payload["canonical"])
+        else:
+            report=scope["execute"](cfg)
         scope["atomic"](state/"last-report.json",report)
+    if resume and hashlib.sha256(shared.read_bytes()).hexdigest()!=shared_digest:raise ValueError("shared_binding_changed")
     receipt=report.get("receipt",{})
     return {"stage":"INCOME_NATIVE_UNIT","source_commit":PIN,"runtime_sha256":payload["sha256"],
         "intake_staged":True,"outcome":report.get("outcome"),"phase":report.get("phase"),
         "artifact_sha256":report.get("artifact_sha256"),
         "native_receipt_readback":receipt.get("native_readback",False),"jira_comment_id":receipt.get("comment_id"),
         "canonical_writeback":report.get("canonical_writeback","PENDING_HOSTED_BRIDGE"),
-        "submitted":0,"contacted":0,"schedule_changed":False}
+        "submitted":0,"contacted":0,"schedule_changed":False,
+        "cached_resume":resume,"model_calls":0 if resume else None,
+        "shared_binding_unchanged":True if resume else None,"income_binding":installed if resume else None}
 
 def server(payload):
     try:
@@ -64,10 +91,13 @@ def deploy():
     sha=hashlib.sha256(runtime.encode()).hexdigest()
     if manifest!={"source_commit":PIN,"sha256":sha}:raise ValueError("runtime_pin")
     mode=os.environ.get("INCOME_MODE","inspect")
-    if mode not in {"inspect","execute"}:raise ValueError("invalid_mode")
+    if mode not in {"inspect","execute","resume"}:raise ValueError("invalid_mode")
     payload={"source":here.read_text(),"runtime":runtime,"sha256":sha,"mode":mode,
              "inspector":here.with_name("inspect_income_native.py").read_text()}
     if mode=="execute":payload["intake"]=json.loads(os.environ["INCOME_NATIVE_INTAKE_JSON"])
+    if mode=="resume":
+        payload["credentials"]={k:os.environ[k] for k in ("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN")}
+        payload["canonical"]=json.loads(os.environ["INCOME_CANONICAL_REVALIDATION_JSON"])
     remote="sudo -n python3 -c 'import json,sys; p=json.load(sys.stdin); s={\"__name__\":\"income_deploy\"}; exec(compile(p[\"source\"],\"income_deploy\",\"exec\"),s); print(json.dumps(s[\"server\"](p),sort_keys=True))'"
     cmd=["ssh","-i",str(Path.home()/".ssh/fabric-preflight"),"-o","BatchMode=yes","-o","ConnectTimeout=15",
          "-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(Path.home()/".ssh/fabric-known-hosts"),user+"@"+host,remote]

@@ -4,7 +4,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [inspect, execute, candidate]
+        options: [inspect, execute, candidate, resume]
         default: inspect
         description: Inspect state, probe updated OAuth candidate, or execute admitted unit
   push:
@@ -70,6 +70,10 @@ jobs:
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
           INCOME_MODE: ${{ inputs.mode || 'inspect' }}
           INCOME_NATIVE_INTAKE_JSON: ${{ secrets.INCOME_NATIVE_INTAKE_JSON }}
+          INCOME_CANONICAL_REVALIDATION_JSON: ${{ secrets.INCOME_CANONICAL_REVALIDATION_JSON }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: python3 scripts/provision_income_native.py
       - name: Remove temporary SSH material
         if: always()
