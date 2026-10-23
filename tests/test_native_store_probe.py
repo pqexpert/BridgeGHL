@@ -26,3 +26,19 @@ class StoreProbeTests(unittest.TestCase):
             self.assertEqual(result["reason"],"http_400_shop_not_permitted")
             self.assertEqual(result["binding"],"not_changed")
             self.assertEqual(list(Path(root).iterdir()),[])
+
+    def test_unknown_workflow_token_never_contacts_provider(self):
+        from scripts.probe_native_store import workflow_token_probe
+        def forbidden(*args,**kwargs):raise AssertionError("provider must not be called")
+        result=workflow_token_probe({"SHOPIFY_WORKFLOW_TOKEN":"unknown-role-secret"},
+            SimpleNamespace(request=forbidden),Path("/unused"))
+        self.assertEqual(result["status"],"UNKNOWN")
+        self.assertEqual(result["api_calls"],0)
+
+    def test_admin_token_candidate_is_bound_to_verified_shop(self):
+        from scripts.probe_native_store import workflow_token_probe
+        def forbidden(*args,**kwargs):raise AssertionError("wrong domain must not be called")
+        result=workflow_token_probe({"SHOPIFY_WORKFLOW_TOKEN":"shpat_"+"x"*32,"SHOPIFY_SHOP_DOMAIN":"wrong.myshopify.com"},
+            SimpleNamespace(request=forbidden),Path("/unused"))
+        self.assertEqual(result["reason"],"verified_shop_domain_mismatch")
+        self.assertEqual(result["api_calls"],0)
