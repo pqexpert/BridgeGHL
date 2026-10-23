@@ -1,6 +1,12 @@
 name: Deploy source ingestion
 on:
   workflow_dispatch:
+    inputs:
+      record_highlevel_cutover:
+        description: Record and verify the fixed HighLevel operating checkpoint
+        type: boolean
+        default: false
+        required: false
   push:
     branches: [main]
     paths:
@@ -16,6 +22,7 @@ on:
       - scripts/configure_ecosystem.py
       - scripts/project_career_fields.py
       - scripts/accept_rsc_autonomy.py
+      - scripts/record_highlevel_cutover.py
       - .github/workflows/deploy-ingestion.yml
 permissions:
   contents: read
@@ -62,9 +69,10 @@ jobs:
           PY
           chmod 600 ~/.ssh/bridgeghl
           ssh-keygen -y -f ~/.ssh/bridgeghl >/dev/null
-          ssh-keyscan -H "$REMOTE_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          test "$REMOTE_HOST" = '74.208.52.45'
+          printf '%s\n' '74.208.52.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIFH9lGiaAYMJi/KGGPAKPPz0dQGcCWdY8c6eLNlMr79' > ~/.ssh/known_hosts
           printf '%s' "$GITHUB_SHA" > DEPLOYED_SHA
-          tar -czf ingestion-release.tgz app.py ingestion.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py DEPLOYED_SHA
+          tar -czf ingestion-release.tgz app.py ingestion.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py scripts/record_highlevel_cutover.py DEPLOYED_SHA
           remote_package="/tmp/bridgeghl-source.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tgz"
           scp -i ~/.ssh/bridgeghl ingestion-release.tgz "${REMOTE_USER}@${REMOTE_HOST}:${remote_package}"
           # RSC production explicitly opts into the bounded task envelope under
@@ -98,6 +106,13 @@ jobs:
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
         run: |
           ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" 'sudo -n systemd-run --quiet --wait --pipe --collect --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env /var/lib/bridgeghl/career-import/runner/bin/python /home/bridgeadmin/apps/BridgeGHL/scripts/accept_rsc_autonomy.py'
+      - name: Record authorized HighLevel operating checkpoint
+        if: github.event_name == 'workflow_dispatch' && inputs.record_highlevel_cutover == true
+        env:
+          REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
+          REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/bridgeghl "${REMOTE_USER}@${REMOTE_HOST}" 'sudo -n systemd-run --quiet --wait --pipe --collect --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env /var/lib/bridgeghl/career-import/runner/bin/python /home/bridgeadmin/apps/BridgeGHL/scripts/record_highlevel_cutover.py --execute'
       - name: Clean up transport material
         if: always()
         run: rm -f ~/.ssh/bridgeghl ingestion-release.tgz DEPLOYED_SHA
