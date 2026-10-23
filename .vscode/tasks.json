@@ -14,6 +14,36 @@
         "panel": "dedicated",
         "clear": true
       }
+    },
+    {
+      "label": "Ziji Fabric: pause local inference",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/local_fabric_control.py",
+        "pause"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Ziji Fabric: resume local inference",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/local_fabric_control.py",
+        "resume"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
     }
   ]
 }

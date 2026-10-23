@@ -1,7 +1,8 @@
-"""Read-only native evidence collector. No inference, messages or domain writes.
+"""Collect native sources read-only; cron separately drains admitted Income research.
 
-Private snapshots prove retrieval, never specialist execution or writer handover.
-Uses existing root-only provider bindings and the existing host cron service.
+The collection function does not infer or mutate provider state. Its cron caller
+may invoke the bounded Income controller after collection. No external messages
+are sent; worker artifact/receipt effects have their own admission and evidence.
 """
 import datetime as dt
 import fcntl
@@ -190,12 +191,38 @@ def install(source, binding_source):
     result['calendar_writer_enabled'] = False
     return result
 
-if __name__ == '__main__':
+def continuation(timeout=300):
+    # Separate admitted worker; collection remains read-only. No extra scheduler.
+    import subprocess
+    worker = Path('/opt/ziji-fabric/dispatch/continuation/income_continuation.py')
+    if not worker.exists(): return
+    if worker.is_symlink() or worker.stat().st_uid != 0 or worker.stat().st_mode & 0o022:
+        raise ProbeError('continuation_source_permissions')
     try:
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--trigger', choices=('manual','cron'), default='manual')
-        print(json.dumps(collect(parser.parse_args().trigger),sort_keys=True))
+        run = subprocess.run(['/usr/bin/python3', str(worker)], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, timeout=timeout)
+        result = {'stage':'INCOME_CONTINUATION_CALL', 'exit_code':run.returncode,
+                  'receipt':'/var/lib/ziji-fabric/dispatch/continuation/latest.json'}
+    except subprocess.TimeoutExpired:
+        result = {'stage':'INCOME_CONTINUATION_CALL', 'status':'TIMEOUT_RECONCILE_NATIVE_STATE'}
+    result['observed_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+    atomic(Path('/var/lib/ziji-fabric/dispatch/continuation/caller-latest.json'), json.dumps(result, sort_keys=True))
+    return result
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--trigger', choices=('manual','cron'), default='manual')
+    trigger = parser.parse_args().trigger
+    failed = False
+    try:
+        print(json.dumps(collect(trigger),sort_keys=True))
     except Exception:
         print('{"stage":"NATIVE_SOURCE_COLLECTION","status":"failed_details_withheld"}')
-        sys.exit(1)
+        failed = True
+    if trigger == 'cron':
+        try: print(json.dumps(continuation(), sort_keys=True))
+        except Exception:
+            print('{"stage":"INCOME_CONTINUATION_CALL","status":"failed_details_withheld"}')
+            failed = True
+    if failed: sys.exit(1)
