@@ -28,6 +28,21 @@ class NativeSources(unittest.TestCase):
         self.assertFalse(result['actor_execution_verified'])
         self.assertEqual(len(calls),3)  # identity plus two comment pages
 
+    def test_dedicated_admissions_preserve_issuer_and_reject_incidental_prose(self):
+        cfg={'email':'owner@example.com','api_token':'secret','base_url':m.JIRA_ROOT,'project_allowlist':['RBO']}
+        rows=[{'id':str(n),'created':'same','updated':'same','author':{'accountId':'issuer'},
+               'body':{'text':body}} for n,body in enumerate(('FABRIC_INCOME_ADMISSION\n{"status":"REVOKED"}', 'Mention FABRIC_INCOME_ADMISSION in prose', 'FABRIC_INCOME_ADMISSION\nmalformed'))]
+        rows[2]['updated']='later'
+        def call(url,*args,**kwargs):
+            if '/myself' in url:return {'active':True,'accountId':'id','emailAddress':cfg['email']}
+            return {'startAt':0,'total':3,'comments':rows}
+        result=m.jira_snapshot(cfg,call)
+        candidates=result['income_admission_candidates']
+        self.assertEqual([x['id'] for x in candidates],['0','2'])
+        self.assertEqual(candidates[0]['update_author_account_id'],'issuer')
+        self.assertIsNone(candidates[1]['update_author_account_id'])
+        self.assertEqual(result['receipt_candidates'],[])
+
     def test_jira_scope_and_identity_fail_before_comments(self):
         cfg={'email':'owner@example.com','api_token':'secret','base_url':m.JIRA_ROOT,'project_allowlist':['RBO']}
         from unittest.mock import Mock
