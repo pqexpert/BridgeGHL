@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-PIN="cf1b6e13176d368930952498342c0a5512c6d4a5"
+PIN="91553c6de0fa4eaf07a7f911befa965469a97093"
 
 def server(payload):
     if os.geteuid()!=0:raise ValueError("root_required")
@@ -17,7 +17,7 @@ def server(payload):
     sys.path.insert(0,"/opt/ziji-fabric/native")
     from collect_native_sources import atomic
     for name,body in payload["files"].items():
-        if name not in ("calendar_writer.py","calendar_handover.py"):raise ValueError("invalid_package_file")
+        if name not in ("calendar_writer.py","calendar_handover.py","source_actions.py"):raise ValueError("invalid_package_file")
         if hashlib.sha256(body.encode()).hexdigest()!=payload["hashes"][name]:raise ValueError("package_digest")
         atomic(root/name,body)
     sys.path.insert(0,str(root))
@@ -47,6 +47,7 @@ def server(payload):
         "eligible_instances":report.get("eligible_instances",0),"feedback_added":report["feedback_added"],
         "feedback_consumed":report["feedback_consumed"],"pending_feedback":report["pending_feedback"],
         "ambiguous_event_count":report["ambiguous_event_count"],"checkpoint":report.get("checkpoint"),
+        "source_interpretation":report.get("source_interpretation",{}),
         "model_status":report["model_status"],"last_good_full":report.get("last_good_full"),
         "cron_enabled":cron.exists(),"package_readback":all(hashlib.sha256((root/n).read_bytes()).hexdigest()==d for n,d in payload["hashes"].items()),
         "calendar_results":report["calendar_results"]}

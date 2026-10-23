@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 import calendar_handover as handover
+import source_actions
 
 UTC=timezone.utc
 ET=ZoneInfo("America/New_York")
@@ -248,21 +249,65 @@ def ingest(events,binding,state,jira,now):
 def lane_receipts(jira,now):
     found={}
     for row in jira.list():
-        body=text(row.get("body",{}))
-        header,sep,payload=body.partition("\n")
-        match=re.fullmatch(r"FABRIC_RUN (income|rsc|store):[^\s]+",header.strip())
-        if not match or not sep:continue
-        lane=match.group(1)
-        try:
-            doc=json.loads(payload)
-            status=doc.get("outcome",doc.get("terminal_state"))
-            if status not in ("SUCCESS","NO_CHANGE","BLOCKED","FAIL"):continue
-            at=handover.stamp(doc.get("observed_at") or row.get("updated",row.get("created")))
+        doc=source_actions.hosted_document(row)
+        if not doc:continue
+        try:at=handover.stamp(doc["observed_at"])
         except (ValueError,TypeError):continue
+        if at>now+timedelta(minutes=5):continue
+        lane=doc["lane"]
         if lane in found and found[lane]["observed_at"]>=iso(at):continue
-        if now-at>timedelta(hours=36):status="STALE"
-        found[lane]={"lane":lane,"status":status,"reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+str(row["id"]),"observed_at":iso(at)}
+        found[lane]={"lane":lane,"status":"STALE" if now-at>timedelta(hours=36) else doc["status"],
+            "reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+doc["comment_id"],
+            "observed_at":iso(at),"comment_id":doc["comment_id"],
+            "source_sha256":handover.digest(doc["body"])}
     return [found.get(lane,{"lane":lane,"status":"PENDING","reference":"https://restoration-mt.atlassian.net/browse/RBO-97","observed_at":None}) for lane in ("income","rsc","store")]
+
+def source_candidates(jira,receipts,state,now):
+    sources=[]
+    rows={str(r["id"]):r for r in jira.list()}
+    for receipt in receipts:
+        if receipt["status"] in ("STALE","PENDING") or not receipt.get("comment_id"):continue
+        doc=source_actions.hosted_document(rows[receipt["comment_id"]])
+        if doc:
+            sources.append({"id":"jira:"+doc["comment_id"],"kind":"hosted_receipt","lane":receipt["lane"],
+                "text":doc["body"],"observed_at":receipt["observed_at"],"reference":receipt["reference"]})
+    feedback=state.get("feedback",{})
+    # Genuine observed revisions first; initial preserved boilerplate is not a user edit.
+    for key,r in sorted(feedback.items(),key=lambda pair:(pair[1].get("classification")!="OWNER_REPORTED",pair[0])):
+        if r.get("status")=="CONSUMED":continue
+        sources.append({"id":key,"kind":"feedback","lane":r["owning_lane"],"text":r["private_suffix"],
+            "classification":r["classification"],"observed_at":r["observed_at"],
+            "reference":"https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId="+str(r.get("jira_capture",{}).get("id",""))})
+    directory=STATE/"interpretations"
+    decisions,summary=source_actions.interpret(sources,
+        lambda key:read(directory/(key+".json")),
+        lambda key,value:save(directory/(key+".json"),value))
+    candidates=[];counts={}
+    for source in sources:
+        result=decisions.get(source["id"])
+        if not result:continue
+        counts[result["kind"]]=counts.get(result["kind"],0)+1
+        if source["kind"]=="feedback":
+            receipt=feedback[source["id"]]
+            receipt["interpretation"]={**result,"status":"INTERPRETED_PENDING_OWNING_LANE_VERIFICATION"}
+            # Preserve the exact private input and interpretation for its actual owner.
+            save(STATE/"inbox"/receipt["owning_lane"]/(handover.digest(source["id"])+".json"),
+                {"feedback_key":source["id"],**receipt})
+            if receipt["current_digest"]!=state.get("baselines",{}).get(receipt["event_id"],{}).get("suffix_digest"):continue
+        at=handover.stamp(source["observed_at"])
+        if now-at>timedelta(hours=36) or at>now+timedelta(minutes=5):continue
+        action=source_actions.admitted_action(source,result)
+        if not action or source["lane"] not in ("income","rsc","store","distiller","academic"):continue
+        candidate={"lane":source["lane"],"status":"PENDING","action":action,
+            "why":"The cited source explicitly requests owner attention; interpretation does not verify completion.",
+            "safe_default":"Preserve existing commitments; take no external action without its existing authority.",
+            "reference":source["reference"],"observed_at":source["observed_at"],
+            "source_id":source["id"],"source_sha256":result["source_sha256"]}
+        candidates.append(candidate)
+    summary.update({"classifications":counts,"admitted":len(candidates),
+        "pending_interpretation":len(sources)-len(decisions),"owning_consumption_asserted":False})
+    return candidates,summary
+
 
 def actionable_candidates(receipts,now):
     candidates=[]
@@ -406,11 +451,15 @@ def run(mode="DELTA",write=False,scheduled=False):
         # Cache model selection across unchanged source versions, not across changed facts.
         fingerprint=hashobj(candidates)
         admitted=actionable_candidates(candidates,now)
+        sourced,interpretation=source_candidates(jira,candidates,state,now)
+        admitted.extend(sourced)
+        save(STATE/"state.json",state)
         selected,modelstatus=select_candidate(admitted,"distiller_"+fingerprint[:48])
         report={"run_id":runid,"mode":mode,"observed_at":iso(now),"coverage":coverage,
             "feedback_added":added,"feedback_consumed":consumed,"pending_feedback":sum(r["status"]!="CONSUMED" for r in state["feedback"].values()),
             "ambiguous_event_count":len(ambiguous),"lane_receipts":candidates,"model_status":modelstatus,
-            "calendar_writes":0,"calendar_results":[],"paid_fallback":False,"status":"NO_CHANGE"}
+            "calendar_writes":0,"calendar_results":[],"paid_fallback":False,"status":"NO_CHANGE",
+            "source_interpretation":interpretation}
         if selected:
             attributable=[r for r in state["feedback"].values() if r["owning_lane"]==selected["lane"]
                           and r["classification"]=="OWNER_REPORTED" and r.get("jira_capture",{}).get("verified")]
@@ -421,7 +470,14 @@ def run(mode="DELTA",write=False,scheduled=False):
             # One consequential update suffices; maxima remain 6FULL/2DELTA.
             if write and eligible:
                 event=eligible[0]
-                effectkey=hashobj({"event":event["id"],"sources":candidates,"feedback":sorted(state["feedback"])})
+                # Re-read the exact hosted source before using a model-selected quote.
+                if selected.get("source_id","").startswith("jira:"):
+                    cid=selected["source_id"].split(":",1)[1]
+                    current=jira.call(JIRA+"/rest/api/3/issue/RBO-97/comment/"+cid,jira.headers)
+                    doc=source_actions.hosted_document(current)
+                    if not doc or handover.digest(doc["body"])!=selected["source_sha256"]:
+                        raise ValueError("action_source_changed")
+                effectkey=hashobj({"event":event["id"],"selected":selected,"sources":candidates,"feedback":sorted(state["feedback"])})
                 effects=state.setdefault("effects",{})
                 if effectkey not in effects:
                     suffix=handover.split_description(event["description"])[1]
