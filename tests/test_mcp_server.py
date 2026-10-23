@@ -92,3 +92,24 @@ def test_health_projects_plugin_contract(monkeypatch):
     assert result["plugin_contract"]["version"] == "rsc-command-center-plugin/v1"
     assert result["plugin_contract"]["actor"] == "RSC Command Center"
     assert set(result["plugin_contract"]["task_tools_advertised"]) == mcp_server.TASK_TOOL_NAMES
+
+
+def test_source_record_wrappers_preserve_existing_backend_payload(monkeypatch):
+    from ingestion import IngestRecord
+    calls=[]
+    def call(path,payload,timeout=25):
+        calls.append((path,payload,timeout))
+        return {'verified':True,'note_ids':['native-note']}
+    monkeypatch.setattr(mcp_server,'_call',call)
+    record={'domain':'income','source_id':'original-source-id','source_url':'https://source.example/item',
+            'kind':'context','title':'Source-bound research','properties':{'unknown':'preserved'},
+            'content':'Exact source text','contact_email':None,'contact_name':None,'company':None}
+    for fn in (mcp_server.dry_run_source_record,mcp_server.execute_source_record):
+        result=fn(**record)
+        assert result['note_ids']==['native-note']
+    assert [x[0] for x in calls]==['/dry-run/ingest/source-record','/execute/ingest/source-record']
+    assert [x[2] for x in calls]==[25,150]
+    for _,payload,_ in calls:
+        assert payload==IngestRecord(**record).model_dump()
+    mcp_server.dry_run_source_record(**{k:v for k,v in record.items() if k!='properties'})
+    assert calls[-1][1]['properties']=={}

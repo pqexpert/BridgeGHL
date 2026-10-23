@@ -71,3 +71,9 @@ Measure duplicate count, rejected/ambiguous records, missing owner/action/date, 
 - https://marketplace.gohighlevel.com/docs/ghl/locations/create-custom-field/index.html
 - https://marketplace.gohighlevel.com/docs/ghl/contacts/create-task/index.html
 - https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow/index.html
+
+## Existing source ingestion through MCP
+
+The MCP adapter exposes `dry_run_source_record` and `execute_source_record` through the existing `/dry-run/ingest/source-record` and `/execute/ingest/source-record` routes. This is an interface to the existing sole writer, with no new PIT, data store or authority. Reuse the original stable source ID and URL mapping; changing source identity can create a different record.
+
+Preview the intended contact/opportunity effects, then execute only within the existing authorization. Source-versioned notes preserve content; the journal persists mutation intent and exact native IDs, refuses ambiguous retries, and verifies provider content. Native opportunity stage and existing contact fields are preserved. Unknown contact identity is not invented. A timeout is unresolved, not permission to submit another source ID. Runtime tool adoption and a real native readback remain separate from source publication.
