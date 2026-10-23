@@ -29,6 +29,16 @@ class IngestRecord(BaseModel):
         extra = 'forbid'
 
 
+class IncomeSourceRead(BaseModel):
+    source_id: str = Field(min_length=1, max_length=200)
+    contact_id: str = Field(min_length=1, max_length=128)
+    opportunity_id: Optional[str] = Field(default=None, max_length=128)
+    current_source_sha256: Optional[str] = Field(default=None, min_length=64, max_length=64)
+
+    class Config:
+        extra = 'forbid'
+
+
 def record_key(record):
     return hashlib.sha256((record.domain + ':' + record.source_id).encode()).hexdigest()[:32]
 
@@ -222,5 +232,19 @@ def register_routes(bridge):
                                 'ts': datetime.now(timezone.utc).isoformat()})
         return receipt
 
+    def read_income(record: IncomeSourceRead, x_api_key: Optional[str] = Header(default=None)):
+        bridge.require_api_key(x_api_key)
+        from income_source_reader import read_income_source, SourceReadError
+        cfg = configuration('income')
+        if not cfg['pipeline_id'] or not cfg['default_contact_id']:
+            raise HTTPException(409, 'Income source binding unavailable')
+        path = os.path.join(os.path.dirname(bridge.AUDIT_LOG_PATH), 'ingestion.sqlite3')
+        try:
+            return read_income_source(record.model_dump(exclude_none=True), bridge.HIGHLEVEL_LOCATION_ID,
+                cfg['pipeline_id'], cfg['default_contact_id'], path, call)
+        except SourceReadError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    bridge.app.post('/read/ingest/income-source')(read_income)
     bridge.app.post('/dry-run/ingest/source-record')(dry_run)
     bridge.app.post('/execute/ingest/source-record')(execute)
