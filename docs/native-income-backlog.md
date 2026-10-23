@@ -4,7 +4,8 @@ RBO-97:12130 authorizes bounded research on existing unfinished HighLevel Income
 records. The Bridge read-only backlog endpoint discovers existing opportunity
 identities from the verified import manifest, then verifies current native
 source notes, intake opportunity state and journal proof. Historical export
-content is a discovery filter only. It never creates jobs, contacts, applications
+content only locates identities. Current journal-backed native notes are fetched
+once per internal contact per pass before eligibility and duplicate decisions. It never creates jobs, contacts, applications
 or outreach. Ambiguous versions, existing artifacts, duplicate role identities,
 unsupported sources, missing explicit Do Not Auto Submit, and non-internal
 context-contact records are deferred.
