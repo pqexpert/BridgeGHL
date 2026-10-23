@@ -1,9 +1,12 @@
 name: Probe existing native Store binding
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/probe-native-store.yml', 'scripts/probe_native_store.py']
+    inputs:
+      credential_source:
+        type: choice
+        options: [client_credentials, workflow_token]
+        default: client_credentials
+        required: true
 permissions:
   contents: read
 jobs:
@@ -53,6 +56,8 @@ jobs:
         env:
           REMOTE_HOST: ${{ secrets.BRIDGEGHL_VPS_IP }}
           REMOTE_USER: ${{ secrets.BRIDGEGHL_VPS_USER }}
+          CREDENTIAL_SOURCE: ${{ inputs.credential_source }}
+          SHOPIFY_WORKFLOW_TOKEN: ${{ inputs.credential_source == 'workflow_token' && secrets.SHOPIFY_WORKFLOW_TOKEN || '' }}
           SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
           SHOPIFY_SHOP_DOMAIN: ${{ secrets.SHOPIFY_SHOP_DOMAIN }}
