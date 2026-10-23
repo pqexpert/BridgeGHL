@@ -70,13 +70,14 @@ def inspect():
     return report
 
 
-def candidate():
+def candidate(config=None):
     """Probe current GitHub OAuth candidate in memory; never install credentials."""
     report={"stage":"INCOME_OAUTH_CANDIDATE","provider_writes":0,"model_calls":0,"binding_changed":False}
+    config=os.environ if config is None else config
     keys=("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN")
-    if any(not os.environ.get(k) for k in keys):
+    if any(not config.get(k) for k in keys):
         return {**report,"outcome":"BLOCKED","reason":"candidate_incomplete"}
-    report["expected_client_match"]=hashlib.sha256(os.environ[keys[0]].encode()).hexdigest()=="6d2db9801e2c9c90792968ccb8974b0806616bd4daf1df196e0e5f7636fad3e2"
+    report["expected_client_match"]=hashlib.sha256(config[keys[0]].encode()).hexdigest()=="6d2db9801e2c9c90792968ccb8974b0806616bd4daf1df196e0e5f7636fad3e2"
     if not report["expected_client_match"]:
         return {**report,"outcome":"BLOCKED","reason":"candidate_client_mismatch"}
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -84,8 +85,8 @@ def candidate():
     opener=urllib.request.build_opener(NoRedirect)
     stage="refresh"
     try:
-        data=urllib.parse.urlencode({"grant_type":"refresh_token","client_id":os.environ[keys[0]],
-              "client_secret":os.environ[keys[1]],"refresh_token":os.environ[keys[2]]}).encode()
+        data=urllib.parse.urlencode({"grant_type":"refresh_token","client_id":config[keys[0]],
+              "client_secret":config[keys[1]],"refresh_token":config[keys[2]]}).encode()
         with opener.open(urllib.request.Request("https://oauth2.googleapis.com/token",data=data),timeout=30) as r:
             token=json.load(r)
         scopes=token.get("scope","").split()
