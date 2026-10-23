@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -74,7 +75,10 @@ def install(payload):
                         or admission_config["drive_folder"] != "1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE"):
                     raise ValueError("admission_config_scope")
                 try:
-                    stamp = dt.datetime.fromisoformat(admission_config["authority_comment_updated"].replace("Z","+00:00"))
+                    # Jira's exact version string is retained; only parsing adapts to Python 3.9.
+                    parse_stamp = admission_config["authority_comment_updated"].replace("Z","+00:00")
+                    parse_stamp = re.sub(r"([+-]\d{2})(\d{2})$",r"\1:\2",parse_stamp)
+                    stamp = dt.datetime.fromisoformat(parse_stamp)
                     if stamp.tzinfo is None:raise ValueError("aware_timestamp_required")
                 except (ValueError,TypeError,AttributeError):
                     raise ValueError("admission_config_authority_version") from None

@@ -66,10 +66,11 @@ class ContinuationStatus(unittest.TestCase):
             result=m.install({'mode':'continuation-refresh','continuation':bundle})
         self.assertEqual(queue.read_bytes(),before);self.assertTrue(result['queue_unchanged'])
         self.assertIn('admitted Income',self.path('/etc/cron.d/ziji-fabric-native-sources').read_text())
-        cfg={'enabled':True,'issuer_account_id':'fixture-issuer','authority_ref':'RBO-97:12086','authority_comment_updated':'2026-10-23T00:00:00+00:00','drive_folder':'1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE'}
+        cfg={'enabled':True,'issuer_account_id':'fixture-issuer','authority_ref':'RBO-97:12086','authority_comment_updated':'2026-10-22T22:05:00.461-0500','drive_folder':'1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE'}
         payload={'mode':'continuation-refresh','continuation':bundle,'admission_config':cfg}
         with patch.object(collector,'atomic',side_effect=lambda p,v,*args:self.write(str(p.relative_to(self.root)),v,raw=True)):
             self.assertEqual(m.install(payload)['admission_config'],'INITIALIZED')
+            self.assertEqual(json.loads(self.path('/etc/ziji-fabric/dispatch/income-admission.json').read_text())['authority_comment_updated'],cfg['authority_comment_updated'])
             self.assertEqual(m.install(payload)['admission_config'],'IDENTICAL')
             with self.assertRaisesRegex(ValueError,'admission_config_conflict_preserved'):
                 m.install({**payload,'admission_config':{**cfg,'issuer_account_id':'different'}})
