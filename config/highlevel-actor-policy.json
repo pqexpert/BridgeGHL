@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "authority": {
+    "comment_id": "12120",
+    "updated": "2026-10-23T07:28:43.970-0500",
+    "issuer_account_id": "712020:957ef1d2-89f5-461a-90e3-ffcfb77330bd"
+  },
+  "issuers": {
+    "712020:957ef1d2-89f5-461a-90e3-ffcfb77330bd": [
+      "income",
+      "rsc",
+      "store",
+      "distiller"
+    ],
+    "712020:50323d36-0c51-416b-b62b-79646ced3343": [
+      "income",
+      "rsc"
+    ]
+  }
+}

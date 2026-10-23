@@ -1,7 +1,7 @@
 """Collect native sources read-only; cron separately drains admitted Income research.
 
 The collection function does not infer or mutate provider state. Its cron caller
-may invoke the bounded Income controller after collection. No external messages
+may project attributable operational evidence and invoke bounded Income work. No external messages
 are sent; worker artifact/receipt effects have their own admission and evidence.
 """
 import datetime as dt
@@ -61,7 +61,7 @@ def jira_snapshot(cfg, call=request):
         not isinstance(identity.get('emailAddress'), str) or
         identity['emailAddress'].lower() != cfg['email'].lower()):
         raise ProbeError('jira_identity_mismatch')
-    comments, admissions, start = [], [], 0
+    comments, admissions, authority, requests, start = [], [], [], [], 0
     for _ in range(100):
         page = call(cfg['base_url'] + '/rest/api/3/issue/RBO-97/comment?' + urllib.parse.urlencode(
             {'startAt':start, 'maxResults':100, 'orderBy':'created'}), headers)
@@ -79,13 +79,25 @@ def jira_snapshot(cfg, call=request):
                 admissions.append({'id':row['id'], 'created':row['created'], 'updated':row['updated'],
                                    'author_account_id':author, 'update_author_account_id':updater,
                                    'body':admission_body})
-            if any(marker in body for marker in ('FABRIC_RUN', 'FABRIC_FINDING', 'FABRIC_CHECKPOINT', 'FABRIC_HANDOFF', 'FABRIC_CALENDAR_FEEDBACK_BASELINE')):
+            author = row.get('author', {}).get('accountId')
+            updater = row.get('updateAuthor', {}).get('accountId')
+            if 'updateAuthor' not in row and row.get('created') == row.get('updated'):
+                updater = author
+            if admission_body.startswith('FABRIC_HIGHLEVEL_REQUEST\n'):
+                requests.append({'id':str(row['id']), 'created':row['created'], 'updated':row['updated'],
+                    'author_account_id':author, 'update_author_account_id':updater, 'body':admission_body})
+            if str(row.get('id')) == '12120':
+                authority.append({'id':str(row['id']), 'updated':row['updated'],
+                    'author_account_id':author, 'update_author_account_id':updater})
+            if any(marker in body for marker in ('FABRIC_RUN', 'FABRIC_FINDING', 'FABRIC_CHECKPOINT', 'FABRIC_DELTA_CHECKPOINT', 'FABRIC_HANDOFF', 'FABRIC_CALENDAR_FEEDBACK_BASELINE')):
                 comments.append({'id':row['id'], 'created':row['created'], 'updated':row['updated'],
+                                 'author_account_id':author, 'update_author_account_id':updater,
                                  'body':body, 'reference':'https://restoration-mt.atlassian.net/browse/RBO-97?focusedCommentId='+row['id']})
         start += len(rows)
         if start >= page['total']:
             return {'coverage':'all_issue_comments', 'comments_scanned':start, 'receipt_candidates':comments,
-                    'income_admission_candidates':admissions,
+                    'income_admission_candidates':admissions, 'operational_authority_candidates':authority,
+                    'highlevel_request_candidates':requests,
                     'source_verified':True, 'actor_execution_verified':False}
         if not rows:
             raise ProbeError('jira_pagination_incomplete')
@@ -187,10 +199,11 @@ def install(source, binding_source):
         raise ProbeError('installation_boundary_invalid')
     ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
     ROOT.chmod(0o700)
-    cron = '# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
+    cron = '# Source collection; admitted Income work and private actor HighLevel evidence projection.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
+    previous_cron = cron.replace('# Source collection; admitted Income work and private actor HighLevel evidence projection.', '# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence.')
     legacy_cron = cron.replace(' --trigger cron', '')
-    old_cron = cron.replace('Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence.', 'Native read-only evidence; no model or provider writes.')
-    if CRON.exists() and CRON.read_text() not in (cron, legacy_cron, old_cron, old_cron.replace(' --trigger cron', '')):
+    old_cron = cron.replace('Source collection; admitted Income work and private actor HighLevel evidence projection.', 'Native read-only evidence; no model or provider writes.')
+    if CRON.exists() and CRON.read_text() not in (cron, previous_cron, previous_cron.replace(' --trigger cron', ''), legacy_cron, old_cron, old_cron.replace(' --trigger cron', '')):
         raise ProbeError('existing_cron_conflict_preserved')
     atomic(ROOT/'bind_native_providers.py',binding_source)
     atomic(ROOT/'collect_native_sources.py',source)
@@ -231,18 +244,55 @@ def continuation(timeout=300):
     atomic(Path('/var/lib/ziji-fabric/dispatch/continuation/caller-latest.json'), json.dumps(result, sort_keys=True))
     return result
 
+def actor_projection(timeout=240, script_name='project_actor_receipts.py'):
+    if script_name not in ('project_actor_receipts.py', 'highlevel_request_queue.py'):
+        raise ProbeError('actor_projection_scope')
+    import subprocess
+    script = Path('/home/bridgeadmin/apps/BridgeGHL/scripts') / script_name
+    policy = Path('/etc/ziji-fabric/highlevel-projection.json')
+    if not policy.exists():
+        return {'stage':'ACTOR_EVIDENCE_PROJECTION','status':'NOT_ENABLED','model_calls':0}
+    if not script.is_file() or script.is_symlink() or script.stat().st_uid != 0 or script.stat().st_mode & 0o022:
+        raise ProbeError('actor_projection_source_permissions')
+    run = subprocess.run(['systemd-run','--quiet','--wait','--pipe','--collect',
+        '--property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env',
+        '/var/lib/bridgeghl/career-import/runner/bin/python',str(script),'--execute'],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout)
+    if len(run.stdout)>65536:
+        raise ProbeError('actor_projection_output_bounds')
+    try:
+        value=json.loads(run.stdout)
+        if not isinstance(value,dict): raise ValueError('object_required')
+        return value
+    except ValueError:
+        return {'stage':'ACTOR_EVIDENCE_PROJECTION','status':'DEFERRED_NO_CURRENT_RESULT','model_calls':0}
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--trigger', choices=('manual','cron'), default='manual')
     trigger = parser.parse_args().trigger
     failed = False
+    current_collection = None
     try:
-        print(json.dumps(collect(trigger),sort_keys=True))
+        current_collection = collect(trigger)
+        print(json.dumps(current_collection,sort_keys=True))
     except Exception:
         print('{"stage":"NATIVE_SOURCE_COLLECTION","status":"failed_details_withheld"}')
         failed = True
     if trigger == 'cron':
+        try:
+            if current_collection and current_collection.get('jira',{}).get('status') == 'retrieved_and_persisted':
+                print(json.dumps(actor_projection(), sort_keys=True))
+        except Exception:
+            print('{"stage":"ACTOR_EVIDENCE_PROJECTION","status":"failed_details_withheld","model_calls":0}')
+            failed = True
+        try:
+            if current_collection and current_collection.get('jira',{}).get('status') == 'retrieved_and_persisted':
+                print(json.dumps(actor_projection(script_name='highlevel_request_queue.py'), sort_keys=True))
+        except Exception:
+            print('{"stage":"HIGHLEVEL_REQUEST_QUEUE","status":"failed_details_withheld","model_calls":0}')
+            failed = True
         try: print(json.dumps(continuation(), sort_keys=True))
         except Exception:
             print('{"stage":"INCOME_CONTINUATION_CALL","status":"failed_details_withheld"}')

@@ -246,7 +246,7 @@ def register_routes(bridge):
                 'rollback': 'New records/notes are journaled by native ID; no automatic deletion.',
                 'messaging': False}
 
-    def execute(record: IngestRecord, x_api_key: Optional[str] = Header(default=None)):
+    def execute_record(record: IngestRecord, x_api_key: Optional[str] = Header(default=None)):
         bridge.require_api_key(x_api_key)
         if os.getenv('HIGHLEVEL_INGEST_ENABLED', '').lower() != 'true':
             raise HTTPException(409, 'HIGHLEVEL_INGEST_ENABLED is not true')
@@ -329,7 +329,7 @@ def register_routes(bridge):
                                 'ts': datetime.now(timezone.utc).isoformat()})
         return receipt
 
-    def read_income(record: IncomeSourceRead, x_api_key: Optional[str] = Header(default=None)):
+    def read_income_record(record: IncomeSourceRead, x_api_key: Optional[str] = Header(default=None)):
         bridge.require_api_key(x_api_key)
         cfg = configuration('income')
         if not cfg['pipeline_id'] or not cfg['default_contact_id']:
@@ -343,6 +343,24 @@ def register_routes(bridge):
         except (OSError, sqlite3.Error, json.JSONDecodeError):
             raise HTTPException(409, "income_source_read_unavailable") from None
 
+    def execute(record: IngestRecord, x_api_key: Optional[str] = Header(default=None)):
+        from provider_budget import actor_scope
+        if os.getenv('HIGHLEVEL_INGEST_ENABLED', '').lower() != 'true':
+            return execute_record(record, x_api_key)
+        path = os.path.join(os.path.dirname(bridge.AUDIT_LOG_PATH), 'ingestion.sqlite3')
+        with actor_scope(record.domain, path):
+            return execute_record(record, x_api_key)
+
+    def read_income(record: IncomeSourceRead, x_api_key: Optional[str] = Header(default=None)):
+        from provider_budget import actor_scope
+        path = os.path.join(os.path.dirname(bridge.AUDIT_LOG_PATH), 'ingestion.sqlite3')
+        with actor_scope('income', path):
+            return read_income_record(record, x_api_key)
+
     bridge.app.post('/read/ingest/income-source')(read_income)
     bridge.app.post('/dry-run/ingest/source-record')(dry_run)
     bridge.app.post('/execute/ingest/source-record')(execute)
+
+    # Internal root projector uses this same writer under a validated actor scope.
+    # No HTTP route accepts an alternate actor or expands CRM domains.
+    return {'execute': execute_record, 'dry_run': dry_run}

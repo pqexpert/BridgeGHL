@@ -32,7 +32,9 @@ Metrics never override the layers above them.
 - Re-resolve current provider state before retrying historical failures; an old 401 or old successful probe is not current truth.
 
 ## Fabric / CRM boundary
-BridgeGHL serves only admitted RSC and Income Accelerator CRM actions under a current envelope. Dzokden Store Manager Ziji and Dzokden purchaser/order/fulfillment PII are prohibited from this bridge and the RSC demand CRM.
+BridgeGHL serves admitted RSC and Income Accelerator CRM actions under a current envelope. Dzokden purchaser/order/fulfillment PII remains prohibited from this bridge and the RSC demand CRM.
+
+Owner-approved operational exception (RBO-97 comment 12120, 2026-10-23): the four existing Actors may project attributable operational evidence to existing internal HighLevel context records through the root-only, author-bound receipt projector. Store and Distiller projections contain only actor/status enums, receipt identifiers, timestamps and hashes; no customer/order data, private Calendar feedback, volunteer hours or Dharma content. This grants no Store CRM/business authority, lead creation, outreach, new Calendar writer or whole-Actor autonomy. Typed asynchronous Income/RSC source requests reuse the existing governed reader/context writer; clients cannot select a Store/Distiller execution budget or arbitrary endpoint. Durable per-Actor/shared request allowances are caps, not throughput targets or claims about provider billing/quota. Existing actor missions and external-effect authority remain separate.
 
 Central Dispatch is coordination transport, not CRM authority. An invoked specialist receives only the narrow governed HighLevel interface plus required ticket/evidence surfaces. Connector presence, credential existence, MCP success, or model acknowledgement never authorizes a write.
 

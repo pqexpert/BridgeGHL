@@ -29,10 +29,11 @@ def install(payload):
     if not cron.is_file() or "11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron" not in cron.read_text():
         raise ValueError("existing_hourly_cadence_required")
     old_comment = "# Native read-only evidence; no model or provider writes."
-    new_comment = "# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence."
+    previous_comment = "# Read-only source collection; admitted Income continuation may use local inference and write Drive/Jira evidence."
+    new_comment = "# Source collection; admitted Income work and private actor HighLevel evidence projection."
     cron_text = cron.read_text()
     expected_line = "11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n"
-    if cron_text not in (old_comment+"\n"+expected_line, new_comment+"\n"+expected_line):
+    if cron_text not in (old_comment+"\n"+expected_line, previous_comment+"\n"+expected_line, new_comment+"\n"+expected_line):
         raise ValueError("existing_cron_conflict_preserved")
     root = Path("/opt/ziji-fabric/dispatch/continuation")
     state = Path("/var/lib/ziji-fabric/dispatch/continuation")
