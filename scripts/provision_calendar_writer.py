@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-PIN="f67585796ffbf1c9276ea580c43f2e73837f83f6"
+PIN="7d6f5575e642f7a047f7c2f729aca9f46ee34638"
 
 def server(payload):
     if os.geteuid()!=0:raise ValueError("root_required")
