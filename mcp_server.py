@@ -222,6 +222,62 @@ def read_journey_evidence(contact_id: str, resource: Literal["conversations", "m
     })
 
 
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True))
+def dry_run_source_record(
+    domain: Literal['income', 'rsc'],
+    source_id: Annotated[str, Field(min_length=1, max_length=200)],
+    source_url: Annotated[str, Field(min_length=1, max_length=2000)],
+    kind: Literal['contact', 'opportunity', 'context'],
+    title: Annotated[str, Field(min_length=1, max_length=500)],
+    properties: dict | None = None,
+    content: Annotated[str, Field(max_length=200000)] = '',
+    contact_email: str | None = None,
+    contact_name: str | None = None,
+    company: str | None = None,
+) -> dict:
+    """Preview existing source-keyed CRM ingestion without provider mutation.
+
+    RSC/Income only. Use the unchanged stable source ID and true source facts.
+    No inferred contact details or Dzokden customer data. Returns missing
+    configuration, note-part count and intended contact/opportunity effects.
+    This preview does not itself grant execution authority.
+    """
+    return _call('/dry-run/ingest/source-record', {
+        'domain':domain, 'source_id':source_id, 'source_url':source_url, 'kind':kind,
+        'title':title, 'properties':properties or {}, 'content':content,
+        'contact_email':contact_email, 'contact_name':contact_name, 'company':company,
+    })
+
+
+@SERVER.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
+def execute_source_record(
+    domain: Literal['income', 'rsc'],
+    source_id: Annotated[str, Field(min_length=1, max_length=200)],
+    source_url: Annotated[str, Field(min_length=1, max_length=2000)],
+    kind: Literal['contact', 'opportunity', 'context'],
+    title: Annotated[str, Field(min_length=1, max_length=500)],
+    properties: dict | None = None,
+    content: Annotated[str, Field(max_length=200000)] = '',
+    contact_email: str | None = None,
+    contact_name: str | None = None,
+    company: str | None = None,
+) -> dict:
+    """Execute an already authorized, previewed source record through the sole bridge writer.
+
+    Existing ingestion gate, location checks, pending-intent journal, source-key
+    dedupe and exact native readback apply. Preserve original source identity.
+    Changed source content creates a new versioned note; native opportunity
+    stage and existing contact fields remain unchanged. No messaging or contact
+    enrichment. Timeout is unresolved: reconcile the same source identity, never
+    invent another ID to bypass a pending effect. Only verified native IDs prove completion.
+    """
+    return _call('/execute/ingest/source-record', {
+        'domain':domain, 'source_id':source_id, 'source_url':source_url, 'kind':kind,
+        'title':title, 'properties':properties or {}, 'content':content,
+        'contact_email':contact_email, 'contact_name':contact_name, 'company':company,
+    }, timeout=150)
+
+
 if __name__ == "__main__":
     # Only the VPS loopback can reach this service; connect externally through
     # an authenticated tunnel, after validating its access controls.
