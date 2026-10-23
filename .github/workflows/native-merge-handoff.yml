@@ -1,5 +1,8 @@
 name: Native RSC merge evidence
 on:
+  workflow_run:
+    workflows: ['Provision bounded native Income unit', 'Execute admitted native RSC unit', 'Provision native Calendar writer']
+    types: [completed]
   pull_request_target:
     types: [closed]
   workflow_dispatch:
@@ -12,6 +15,13 @@ on:
         type: choice
         options: [pqexpert/BridgeGHL, pqexpert/rsc-operations-console]
         default: pqexpert/BridgeGHL
+      workflow_run_id:
+        description: 'Optional existing terminal run to observe/prove; never launches that workflow'
+        type: string
+        default: ''
+      workflow_run_attempt:
+        type: string
+        default: '1'
       pull_request:
         type: string
         default: '75'
@@ -25,7 +35,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   handoff:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_run' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: zijifabric
     timeout-minutes: 6
@@ -42,5 +52,7 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.BRIDGEGHL_VPS_SSH_KEY }}
           HANDOFF_MODE: ${{ inputs.mode || 'event' }}
           HANDOFF_REPO: ${{ inputs.repository || github.repository }}
+          HANDOFF_RUN_ID: ${{ inputs.workflow_run_id || '' }}
+          HANDOFF_RUN_ATTEMPT: ${{ inputs.workflow_run_attempt || '1' }}
           HANDOFF_PR: ${{ inputs.pull_request || github.event.pull_request.number }}
         run: python3 scripts/native_merge_handoff.py
