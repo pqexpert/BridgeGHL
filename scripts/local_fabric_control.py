@@ -11,7 +11,8 @@ DROPINS=Path.home()/".config/systemd/user"
 CONTENT="[Unit]\nConditionPathExists=!%h/.local/share/ziji-local/transport/operator-pause.json\n"
 
 def command(*args):
-    p=subprocess.run(["systemctl","--user",*args],capture_output=True,text=True,timeout=30)
+    try:p=subprocess.run(["systemctl","--user",*args],capture_output=True,text=True,timeout=30)
+    except subprocess.TimeoutExpired:raise RuntimeError("systemctl_"+args[0]+"_timeout") from None
     if p.returncode:raise RuntimeError("systemctl_"+args[0]+"_failed")
     return p.stdout.strip()
 
@@ -74,7 +75,7 @@ def operate(action):
         try:
             for u in reversed(UNITS):
                 if u in paused["resume_units"]:
-                    command("start",u);started.append(u)
+                    started.append(u);command("start",u)
                     if command("show",u,"--property=ActiveState","--value")!="active":raise RuntimeError("resume_not_active")
         except RuntimeError:
             write_private(MARKER,paused)

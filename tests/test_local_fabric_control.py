@@ -28,9 +28,11 @@ class Controls(unittest.TestCase):
     def test_failed_resume_restores_pause(self):
         with patch.object(c,"command",side_effect=self.command):c.operate("pause")
         first=c.MARKER.read_bytes()
+        original=c.command
         def failure(*args):
-            if args[0]=="start":raise RuntimeError("start_failed")
+            if args[0]=="start":return original(*args)
             return self.command(*args)
-        with patch.object(c,"command",side_effect=failure),self.assertRaises(RuntimeError):c.operate("resume")
+        with patch.object(c,"command",side_effect=failure),patch.object(c.subprocess,"run",side_effect=c.subprocess.TimeoutExpired("systemctl",30)),self.assertRaisesRegex(RuntimeError,"start_timeout"):c.operate("resume")
         self.assertEqual(c.MARKER.read_bytes(),first)
+        self.assertEqual(self.calls[-1],("stop",c.UNITS[0]))
 if __name__=="__main__":unittest.main()
