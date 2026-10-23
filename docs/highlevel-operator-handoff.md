@@ -14,6 +14,8 @@ Recorded native asset state: 2026-10-23. HighLevel is the operational destinatio
 | RSC Security Resilience community | `rsc-security-resilience` | Active, zero members, discovery off; owner's first password remains pending under the manual credential rule |
 | Unused generated form | `uhW7DFu2n4Du2C6q2esP` | Unbound; labeled **UNUSED DRAFT - Page builder placeholder - do not publish** |
 
+The exported public custom HTML is preserved at [assets/highlevel/rsc-consultation-content.html](../assets/highlevel/rsc-consultation-content.html). This captures the page content, not a full SaaS backup of native funnel settings, form bindings or community membership. Native IDs above remain the recovery pointers.
+
 Verified page title: **Security Consultation | Restoration Security Consultants**.
 
 Verified description: **Discuss your cybersecurity priorities with Restoration Security Consultants. Share your goals and request a practical next conversation.**
