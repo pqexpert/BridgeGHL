@@ -448,11 +448,10 @@ def run(mode="DELTA",write=False,scheduled=False):
         consumed=consume_feedback(state,jira,now)
         save(STATE/"state.json",state)
         candidates=lane_receipts(jira,now)
-        # Cache model selection across unchanged source versions, not across changed facts.
-        fingerprint=hashobj(candidates)
         admitted=actionable_candidates(candidates,now)
         sourced,interpretation=source_candidates(jira,candidates,state,now)
         admitted.extend(sourced)
+        fingerprint=hashobj({"receipts":candidates,"admitted":admitted,"feedback_versions":{k:r["current_digest"] for k,r in state["feedback"].items()}})
         save(STATE/"state.json",state)
         selected,modelstatus=select_candidate(admitted,"distiller_"+fingerprint[:48])
         report={"run_id":runid,"mode":mode,"observed_at":iso(now),"coverage":coverage,

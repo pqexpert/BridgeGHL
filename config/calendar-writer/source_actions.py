@@ -4,7 +4,9 @@ import importlib.util
 import json
 import re
 
-VERSION="source-spans-v1"
+VERSION="source-spans-v2"
+HOSTED_ISSUER="712020:957ef1d2-89f5-461a-90e3-ffcfb77330bd"
+TASKS={"income":"6a96ff3083b8819184b810aa8f640f3d","rsc":"6a96ff3596ec8191901165a75230bf41","store":"6a96f30dc25081918153e77e5e45f9e0"}
 TERMINALS={"SUCCESS","NO_CHANGE","BLOCKED","FAIL"}
 KINDS={"CONTEXT_ONLY","OWNER_REPORT","OWNER_ACTION","AGENT_ACTION","AMBIGUOUS"}
 OWNER=re.compile(r"\b(?:Josh|owner|you|your)\b",re.I)
@@ -19,6 +21,10 @@ def paragraphs(node):
     return value+("\n" if node.get("type") in ("paragraph","heading","listItem","hardBreak") else "")
 
 def hosted_document(row):
+    author=row.get("author",{}).get("accountId")
+    editor=row.get("updateAuthor",{}).get("accountId")
+    if not editor and row.get("created") and row.get("created")==row.get("updated"):editor=author
+    if author!=HOSTED_ISSUER or editor!=HOSTED_ISSUER:return None
     body=paragraphs(row.get("body",{})).strip()
     lines=body.splitlines()
     if not lines:return None
@@ -30,11 +36,14 @@ def hosted_document(row):
     except ValueError:structured=None
     if isinstance(structured,dict):
         terminal=structured.get("outcome",structured.get("terminal_state"))
-        observed=structured.get("observed_at")
+        observed=structured.get("observed_at") or structured.get("observed_utc")
+        identity=structured.get("execution_identity")
     else:
         observed=re.search(r"\bobserved_utc\s*[:=]\s*(\d{4}-\d\d-\d\dT[\d:.]+(?:Z|[+-]\d\d:\d\d))",rest)
         observed=observed.group(1) if observed else None
-    if terminal not in TERMINALS or not observed:return None
+        identities=re.findall(r"\bexecution_identity\s*[:=]\s*(hosted_task:[A-Za-z0-9_-]+)",rest)
+        identity=identities[0] if len(identities)==1 else None
+    if terminal not in TERMINALS or not observed or identity!="hosted_task:"+TASKS[lane]:return None
     return {"lane":lane,"run_id":runid,"status":terminal,"observed_at":observed,
             "body":body,"comment_id":str(row["id"])}
 
