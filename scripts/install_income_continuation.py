@@ -8,6 +8,16 @@ import re
 from pathlib import Path
 
 
+def validate_tracker(item, scope):
+    intake = item["intake"]
+    if intake.get("tracker_url", "").startswith("https://app.notion.com/p/"):
+        return  # Preserve existing immutable historical identities and completed caches.
+    ref = scope["highlevel_reference"](item.get("canonical",{}).get("highlevel"))
+    if (intake.get("tracker_url") != scope["highlevel_identity"](ref)
+            or intake.get("tracker_version") != ref["current_source_sha256"]):
+        raise ValueError("canonical_tracker_scope")
+
+
 def install(payload):
     if os.geteuid() != 0: raise ValueError("root_required")
     from collect_native_sources import atomic
@@ -42,7 +52,7 @@ def install(payload):
         if not scope["admitted"](item, now): raise ValueError("queue_admission_not_current")
         intake = item["intake"]
         if intake.get("drive_folder") != "1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE": raise ValueError("career_folder_scope")
-        if not intake.get("tracker_url", "").startswith("https://app.notion.com/p/"): raise ValueError("canonical_tracker_scope")
+        validate_tracker(item, scope)
     destination = cfg / "income-queue.json"
     collector = Path("/opt/ziji-fabric/native/collect_native_sources.py")
     if collector.is_symlink() or hashlib.sha256(collector.read_bytes()).hexdigest() not in (bundle["collector_previous_sha256"],bundle["hashes"]["collector"]):
