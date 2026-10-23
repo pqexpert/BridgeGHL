@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-PIN="cf1b6e13176d368930952498342c0a5512c6d4a5"
+PIN="7d6f5575e642f7a047f7c2f729aca9f46ee34638"
 
 def server(payload):
     if os.geteuid()!=0:raise ValueError("root_required")
@@ -17,7 +17,7 @@ def server(payload):
     sys.path.insert(0,"/opt/ziji-fabric/native")
     from collect_native_sources import atomic
     for name,body in payload["files"].items():
-        if name not in ("calendar_writer.py","calendar_handover.py"):raise ValueError("invalid_package_file")
+        if name not in ("calendar_writer.py","calendar_handover.py","source_actions.py"):raise ValueError("invalid_package_file")
         if hashlib.sha256(body.encode()).hexdigest()!=payload["hashes"][name]:raise ValueError("package_digest")
         atomic(root/name,body)
     sys.path.insert(0,str(root))
@@ -33,7 +33,7 @@ def server(payload):
         at=writer.handover.stamp(evidence["observed_at"])
         if abs((writer.utcnow()-at).total_seconds())>600:raise ValueError("hosted_disable_evidence_stale")
         writer.save(writer.ACTIVATION,{"enabled":True,"hosted_writer_disabled":True,"hosted_evidence":evidence,"source_commit":PIN})
-        report=writer.run("FULL",write=True)
+        report=writer.run("FULL",write=True,accept_handover=True)
         if report.get("status") not in ("VERIFIED","NO_CHANGE"):raise ValueError("first_run_not_verified")
         expected="# Existing Distiller six ET slots; off-slot local checks make no API calls.\n0,15,45 * * * * root /usr/bin/python3 /opt/ziji-fabric/calendar-writer/calendar_writer.py --scheduled --write >/dev/null 2>&1\n"
         if cron.exists() and cron.read_text()!=expected:raise ValueError("cron_conflict_preserved")
@@ -47,6 +47,8 @@ def server(payload):
         "eligible_instances":report.get("eligible_instances",0),"feedback_added":report["feedback_added"],
         "feedback_consumed":report["feedback_consumed"],"pending_feedback":report["pending_feedback"],
         "ambiguous_event_count":report["ambiguous_event_count"],"checkpoint":report.get("checkpoint"),
+        "source_interpretation":report.get("source_interpretation",{}),
+        "handover_baselines_adopted":report.get("handover_baselines_adopted",0),
         "model_status":report["model_status"],"last_good_full":report.get("last_good_full"),
         "cron_enabled":cron.exists(),"package_readback":all(hashlib.sha256((root/n).read_bytes()).hexdigest()==d for n,d in payload["hashes"].items()),
         "calendar_results":report["calendar_results"]}
