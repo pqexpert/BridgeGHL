@@ -106,6 +106,8 @@ def deploy():
         payload["installer"]=here.with_name("install_income_continuation.py").read_text()
         payload["continuation"]=json.loads(here.with_name("income_continuation_bundle.json").read_text())
         if mode=="continuation": payload["queue"]=json.loads(os.environ["INCOME_CONTINUATION_QUEUE_JSON"])
+        if mode in {"continuation","continuation-refresh"} and os.environ.get("INCOME_ADMISSION_CONFIG_JSON"):
+            payload["admission_config"]=json.loads(os.environ["INCOME_ADMISSION_CONFIG_JSON"])
     if mode=="execute":payload["intake"]=json.loads(os.environ["INCOME_NATIVE_INTAKE_JSON"])
     if mode=="resume":
         payload["credentials"]={k:os.environ[k] for k in ("GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN")}

@@ -61,6 +61,32 @@ def install(payload):
                 raise ValueError("existing_cron_conflict_preserved")
             if collector.is_symlink() or hashlib.sha256(collector.read_bytes()).hexdigest() not in (bundle["collector_previous_sha256"],bundle["hashes"]["collector"]):
                 raise ValueError("collector_changed_preserved")
+            admission_config = payload.get("admission_config")
+            config_state = "UNCHANGED"
+            admission_path = cfg / "income-admission.json"
+            if admission_config is not None:
+                expected_fields = {"enabled","issuer_account_id","authority_ref","authority_comment_updated","drive_folder"}
+                if (not isinstance(admission_config,dict) or set(admission_config) != expected_fields
+                        or admission_config["enabled"] is not True
+                        or not isinstance(admission_config["issuer_account_id"],str)
+                        or not 1 <= len(admission_config["issuer_account_id"]) <= 200
+                        or admission_config["authority_ref"] != "RBO-97:12086"
+                        or admission_config["drive_folder"] != "1j_pa8A2sXBSA9vy87B6nyKo-myZ3HDaE"):
+                    raise ValueError("admission_config_scope")
+                try:
+                    stamp = dt.datetime.fromisoformat(admission_config["authority_comment_updated"].replace("Z","+00:00"))
+                    if stamp.tzinfo is None:raise ValueError("aware_timestamp_required")
+                except (ValueError,TypeError,AttributeError):
+                    raise ValueError("admission_config_authority_version") from None
+                if admission_path.is_symlink():raise ValueError("admission_config_conflict_preserved")
+                if admission_path.exists():
+                    if admission_path.stat().st_uid != 0 or scope["read"](admission_path) != admission_config:
+                        raise ValueError("admission_config_conflict_preserved")
+                    config_state = "IDENTICAL"
+                else:
+                    atomic(admission_path,json.dumps(admission_config,sort_keys=True))
+                    if scope["read"](admission_path) != admission_config:raise ValueError("admission_config_readback")
+                    config_state = "INITIALIZED"
             sources = {root / "income_continuation.py":bundle["controller"],
                        Path("/opt/ziji-fabric/income/career_unit.py"):bundle["runtime"],
                        collector:bundle["collector"]}
@@ -74,7 +100,7 @@ def install(payload):
             verified = scope["read"](destination)
             if len(verified["items"]) != len(items): raise ValueError("queue_readback")
             receipt = {"stage":"INCOME_CONTINUATION_INSTALL","outcome":"STAGED",
-                       "source_readback":True,"queue_unchanged":refresh,"queue_items":len(items),"source_pins":bundle["pins"],
+                       "source_readback":True,"admission_config":config_state,"queue_unchanged":refresh,"queue_items":len(items),"source_pins":bundle["pins"],
                        "installed_at":now.isoformat(),"existing_cadence":"hourly_at_minute_11",
                        "new_scheduler":False,"model_calls":0,"jobs_executed":0,
                        "paid_fallback":False,"daily_model_limit":1,
