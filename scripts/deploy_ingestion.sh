@@ -80,6 +80,13 @@ for file in "${files[@]}"; do
   "${privilege[@]}" mkdir -p "$app_dir/$(dirname "$file")"
   "${privilege[@]}" install -m 644 "$stage/$file" "$app_dir/$file"
 done
+# Root-private import is not readable by the app. Project only verified IDs.
+"${privilege[@]}" python3 - "$app_dir" <<'LOCATOR_PY'
+import json,sys
+sys.path.insert(0,sys.argv[1])
+from scripts.income_backlog import install_locator
+print(json.dumps(install_locator(),sort_keys=True))
+LOCATOR_PY
 # This RSC production deployment explicitly opts into the already-reviewed,
 # exact-key task envelope. The application default remains fail-closed.
 set_task_flag "$task_writes"
@@ -122,3 +129,11 @@ echo "task_writes_enabled=$task_writes"
 "${privilege[@]}" systemd-run --quiet --wait --pipe --collect \
   --property=EnvironmentFile=/etc/bridgeghl/bridgeghl.env \
   /usr/bin/python3 "$app_dir/scripts/runtime_ingestion_check.py"
+
+# Read-only access proof after deployment; never invokes a model or writes CRM.
+"${privilege[@]}" python3 - "$app_dir" <<'BACKLOG_PY'
+import json,sys
+sys.path.insert(0,sys.argv[1])
+from scripts.income_backlog import binding_diagnosis
+print(json.dumps({"income_backlog_access":binding_diagnosis()},sort_keys=True))
+BACKLOG_PY
