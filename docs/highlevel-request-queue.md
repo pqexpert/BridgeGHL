@@ -6,7 +6,7 @@ The existing collector supplies fresh verified full RBO-97 snapshots. The root-o
 
 ## Request
 
-One exact marker line `FABRIC_HIGHLEVEL_REQUEST`, followed only by a JSON object:
+One exact marker paragraph `FABRIC_HIGHLEVEL_REQUEST`, followed by a literal JSON code block. Use ADF codeBlock/plain text so URL auto-linking cannot split JSON strings during native text extraction; do not submit a rich-text paragraph containing inline URL cards. The extracted body must contain only marker + newline + JSON object:
 
 ```json
 {
@@ -48,3 +48,11 @@ A verified bridge result can finish publishing its stable `highlevel:<request_id
 The existing health surface may expose highlevel-request-status.json, containing only request ID/lane/operation/hash, source request comment ID, status, receipt pointer and native-readback timestamp. It excludes native record bodies and contact IDs. A hosted actor consumes that pointer on its next normal run and reads the exact private Jira receipt when needed. Cached delivery evidence is not a fresh business-source read. Existing hourly collection introduces asynchronous latency; no polling loop or forced actor run is needed.
 
 Success today means the real existing checkpoint was natively read at its pinned digest, and the owner-approved operating-plan context was dry-run, written or reconciled and natively read back, with exact Jira receipt IDs. It does not establish new job admission, outreach, application submission or complete four-actor mission automation.
+
+## Verified hosted handoff and operational target repair
+
+All four existing hosted prompts were updated and read back exactly at 2026-10-23 13:26 UTC. Their schedules, enabled states, titles, timezones and timing remained unchanged. On the next ordinary run they read cached own-lane projection/request evidence through bridge_health; Income/RSC use the bounded request queue when source tools are unavailable, while Store/Distiller retain status-only access. Natural-run consumption remains pending; prompt publication is not execution proof.
+
+Native preview39961374746 proved the RSC default context binding absent while the existing internal Income context was available. Owner-authorized root operational processes now reuse that verified internal context only when RSC has no configured default. RSC source domain/keys and request budget stay RSC. The service environment and customer routes are unchanged; no contact is created. The existing writer checks native contact identity/location before each effect. An explicitly configured RSC target always takes precedence.
+
+RSC request12124 was reformatted in place as marker + literal JSON codeBlock after native preview showed it absent; its exact payload, request ID and timestamps were preserved. The inline-link presentation had broken literal JSON extraction. No duplicate request was published. Approval12120 is unchanged.
