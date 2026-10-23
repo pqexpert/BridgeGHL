@@ -2,6 +2,7 @@
 from datetime import datetime,timezone
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -53,6 +54,32 @@ def receipts():
     except (OSError,ValueError,TypeError):result["status"]="UNKNOWN"
     return result
 
+def vps_receipts():
+    result={"status":"UNAVAILABLE", "coverage":"Cached deployment receipts only; not live VPS state", "receipts":[]}
+    try:
+        path=STATE/"vps-worker-receipts.json";st=path.lstat()
+        if st.st_uid!=os.geteuid() or st.st_mode & 0o077:raise ValueError()
+        value=private_json(path)
+        if value.get("schema")!="ziji-cached-vps-receipts/1" or not isinstance(value.get("receipts"),list):raise ValueError()
+        for row in value["receipts"][:8]:
+            if not isinstance(row,dict) or row.get("lane") not in ("income","rsc","store","distiller","dispatch"):continue
+            observed=datetime.fromisoformat(row["observed_at"].replace("Z","+00:00"))
+            if observed.tzinfo is None:raise ValueError()
+            clean={"lane":row["lane"],"observed_at":observed.isoformat(),"evidence_state":"CACHED_VPS_RECEIPT"}
+            for key,pattern in (("outcome",r"[A-Z_]{1,48}"),("action_class",r"[a-z0-9_]{1,80}"),
+                                ("run_id",r"[0-9]{1,24}"),("source_sha",r"[0-9a-f]{7,64}"),
+                                ("artifact_sha256",r"[0-9a-f]{64}")):
+                if isinstance(row.get(key),str) and re.fullmatch(pattern,row[key]):clean[key]=row[key]
+            for key in ("native_readback","whole_actor_replaced","paid_fallback"):
+                if isinstance(row.get(key),bool):clean[key]=row[key]
+            if type(row.get("model_calls")) is int and 0<=row["model_calls"]<=1000:clean["model_calls"]=row["model_calls"]
+            result["receipts"].append(clean)
+        result.update(status="CACHED_VPS_RECEIPT",cache_modified_utc=stamp(path))
+    except (OSError,ValueError,TypeError,KeyError,AttributeError):
+        result["status"]="UNAVAILABLE_OR_INVALID"
+        result["receipts"]=[]
+    return result
+
 def main():
     recovery={"status":"UNKNOWN"}
     try:
@@ -61,7 +88,7 @@ def main():
                   "github_backup":"Separate off-host receipt; not proved by this local file"}
     except (OSError,ValueError,TypeError):pass
     report={"observed_at":datetime.now(timezone.utc).isoformat(),"services":{u:unit(u) for u in UNITS},
-            "local_health":health(),"proposal_receipts":receipts(),"recovery":recovery,
+            "local_health":health(),"proposal_receipts":receipts(),"recovery":recovery,"vps_receipts":vps_receipts(),
             "operator_pause":{"requested":(STATE/"transport/operator-pause.json").exists(),
                               "scope":"Local inference only; does not cancel remote provider effects"},
             "vps_live_check":"NOT_PERFORMED; active tunnel alone does not prove remote jobs or connectivity",
