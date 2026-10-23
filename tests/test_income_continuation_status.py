@@ -24,7 +24,7 @@ class ContinuationStatus(unittest.TestCase):
         patch.object(m,'Path',self.path).start();patch.object(m.os,'geteuid',return_value=0).start()
         self.state='/var/lib/ziji-fabric/dispatch/continuation/'
         self.bundle={'hashes':{}}
-        self.files={'controller':'/opt/ziji-fabric/dispatch/continuation/income_continuation.py','runtime':'/opt/ziji-fabric/income/career_unit.py','collector':'/opt/ziji-fabric/native/collect_native_sources.py'}
+        self.files={'controller':'/opt/ziji-fabric/dispatch/continuation/income_continuation.py','runtime':'/opt/ziji-fabric/income/career_unit.py','collector':'/opt/ziji-fabric/native/collect_native_sources.py','native_selector':'/opt/ziji-fabric/dispatch/continuation/native_income_backlog.py','transport':'/usr/local/lib/ziji-local-link/local_inference_transport.py'}
         for name,path in self.files.items():
             self.write(path,'source-'+name,raw=True)
             self.bundle['hashes'][name]=hashlib.sha256(('source-'+name).encode()).hexdigest()
@@ -58,6 +58,7 @@ class ContinuationStatus(unittest.TestCase):
     def test_refresh_preserves_expired_queue_bytes(self):
         bundle=json.loads((Path(__file__).parents[1]/'scripts/income_continuation_bundle.json').read_text())
         self.write(self.files['collector'],bundle['collector'],raw=True)
+        self.write(self.files['transport'],bundle['transport'],raw=True)
         cron='# Native read-only evidence; no model or provider writes.\n11 * * * * root /usr/bin/python3 /opt/ziji-fabric/native/collect_native_sources.py --trigger cron >/dev/null 2>&1\n'
         self.write('/etc/cron.d/ziji-fabric-native-sources',cron,raw=True)
         self.write('/var/lib/ziji-fabric/income/unit.lock','',raw=True)
