@@ -24,7 +24,7 @@ One exact marker line `FABRIC_HIGHLEVEL_REQUEST`, followed only by a JSON object
 }
 ```
 
-This is a schema example, not an executed request. Omitting contact_id resolves the existing Income context contact only on the protected server. Optional exact contact_id/opportunity_id are still validated by the existing native reader. The SHA is mandatory; no guessed latest version. Returned evidence includes verified source IDs/digest, native IDs, bounded title/source URL, and readback. It excludes arbitrary content/properties and does not grant execution admission.
+This is a schema example, not an executed request. Omitting contact_id resolves the existing Income context contact only on the protected server. Optional exact contact_id/opportunity_id are still validated by the existing native reader. The SHA is mandatory; no guessed latest version. Returned evidence includes verified source IDs/digest, native IDs, bounded title/source URL, allowlisted exact admission facts and verified legacy aliases, and readback. Admission flags are source facts, not authorization. It excludes arbitrary content/properties and does not grant execution admission.
 
 Operations `income.write_context` and `rsc.write_context` accept payload **only**:
 
@@ -43,7 +43,7 @@ They always use kind=context, empty properties and the existing configured ownin
 
 The runner checks allowlisted author and editor, current authority version and expiry, then exact-fetches authority and selected request before any effect. Modified payload under a prior request ID or duplicate request ID is CONFLICT. A write first logs the actual accepted dry-run operation plan, then invokes the existing execute route and its source-note journal/readback. Request/hash/state/result persist in the existing ingestion.sqlite3 highlevel_requests table; no second database.
 
-A verified bridge result can finish publishing its stable `highlevel:<request_id>` Jira receipt without another provider mutation. Unknown provider effects remain UNKNOWN/PENDING for native reconciliation; the automatic runner does not blindly resend. Existing note journal preserves ambiguous mutation evidence. Actual read/write result and receipt delivery are distinct. Read budget exhaustion or unknown errors do not mean mission success.
+A verified bridge result can finish publishing its stable `highlevel:<request_id>` Jira receipt without another provider mutation. Uncertain attempts back off six hours and permit at most three attempts under fresh authority/request CAS. Reads can retry; writes re-enter the same existing ingestion journal and exact payload: native lookup precedes creation, and unresolved prior creation refuses another POST. Exhausted attempts remain UNKNOWN without blocking later independent same-lane requests. Existing note journal preserves ambiguous mutation evidence. Actual read/write result and receipt delivery are distinct. Read budget exhaustion or unknown errors do not mean mission success.
 
 The existing health surface may expose highlevel-request-status.json, containing only request ID/lane/operation/hash, source request comment ID, status, receipt pointer and native-readback timestamp. It excludes native record bodies and contact IDs. A hosted actor consumes that pointer on its next normal run and reads the exact private Jira receipt when needed. Cached delivery evidence is not a fresh business-source read. Existing hourly collection introduces asynchronous latency; no polling loop or forced actor run is needed.
 

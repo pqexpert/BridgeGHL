@@ -34,7 +34,7 @@ def require(value, reason):
 
 
 def parse(row, policy, now):
-    body = row.get("body", "")
+    body = row.get("body", "").strip()
     require(isinstance(body, str) and len(body) <= 12000 and body.startswith(MARKER+"\n"), "request_marker")
     obj = json.loads(body[len(MARKER)+1:])
     require(isinstance(obj, dict) and set(obj) == {
@@ -77,8 +77,9 @@ def parse(row, policy, now):
 
 
 def exact_matches(row, fresh):
-    return all(fresh.get(k) == row.get(k) for k in
-               ("id", "created", "updated", "author_account_id", "update_author_account_id", "body"))
+    return (all(fresh.get(k) == row.get(k) for k in
+               ("id", "created", "updated", "author_account_id", "update_author_account_id"))
+            and fresh.get("body", "").strip() == row.get("body", "").strip())
 
 
 def authority_matches(policy, fresh):
@@ -107,10 +108,14 @@ class Journal:
             row = db.execute("SELECT request_hash,state,result FROM highlevel_requests WHERE request_id=?", (key,)).fetchone()
         return None if row is None else {"hash":row[0], "state":row[1], "result":json.loads(row[2]) if row[2] else None}
 
-    def claim(self, key, fingerprint):
+    def claim(self, key, fingerprint, attempt, old=None):
         with self.connect() as db:
-            return db.execute("INSERT OR IGNORE INTO highlevel_requests VALUES (?,?,?,NULL)",
-                              (key, fingerprint, "PENDING")).rowcount == 1
+            if old is None:
+                return db.execute("INSERT OR IGNORE INTO highlevel_requests VALUES (?,?,?,?)",
+                                  (key, fingerprint, "PENDING", json.dumps(attempt, sort_keys=True))).rowcount == 1
+            return db.execute("UPDATE highlevel_requests SET state=?,result=? WHERE request_id=? AND request_hash=? AND state=? AND result=?",
+                              ("PENDING", json.dumps(attempt, sort_keys=True), key, fingerprint,
+                               old["state"], json.dumps(old["result"], sort_keys=True))).rowcount == 1
 
     def save(self, key, fingerprint, state, result):
         with self.connect() as db:
@@ -129,7 +134,19 @@ def safe_result(operation, result):
                   "location_id", "contact_id", "opportunity_id", "note_ids")}
         title, url = source.get("title"), source.get("source_url")
         require(isinstance(title, str) and len(title) <= 500 and isinstance(url, str) and len(url) <= 2000, "readback_source_shape")
+        projection = result.get("admission_projection")
+        if projection is not None:
+            fields = {"provider", "board", "job_id", "title", "packet_id", "do_not_submit", "duplicate_clear", "artifact_absent"}
+            require(isinstance(projection, dict) and set(projection) == fields, "readback_admission_shape")
+            for key in ("provider", "board", "job_id", "title", "packet_id"):
+                require(isinstance(projection[key], str) and 0 < len(projection[key]) <= 500, "readback_admission_field")
+            for key in ("do_not_submit", "duplicate_clear", "artifact_absent"):
+                require(type(projection[key]) is bool, "readback_admission_flag")
+        aliases = result.get("legacy_provenance_urls", [])
+        require(isinstance(aliases, list) and len(aliases) <= 20 and all(
+            isinstance(value, str) and len(value) <= 2000 for value in aliases), "readback_aliases")
         output.update(source={"title":title, "source_url":url}, native_readback=True,
+                      admission_projection=projection, legacy_provenance_urls=aliases,
                       source_body_returned=False, execution_admitted=False)
         return output
     require(result.get("verified") is True and result.get("opportunity_id") is None
@@ -166,28 +183,40 @@ def process(snapshot, policy, journal, exact_comment, invoke, publish, now, exec
             continue
         if lane in used:
             continue
-        used.add(lane)
         if not execute:
+            used.add(lane)
             results.append(dict(base, status="PREVIEW", existing_state=old["state"] if old else None,
                                 kind="context" if obj["operation"].endswith("write_context") else "source_read",
                                 source_id=obj["payload"]["source_id"], model_calls=0))
             continue
-        # Durable successful bridge result can finish its same exact Jira receipt
-        # without replaying provider effects. Pending unknown effects never rerun.
+        prior_attempt = old["result"] if old and old["state"] != "BRIDGE_VERIFIED" else None
+        if old and old["state"] != "BRIDGE_VERIFIED":
+            if not prior_attempt or prior_attempt.get("attempts", 3) >= 3:
+                results.append(dict(base, status="UNKNOWN", reason="bounded_reconciliation_exhausted"))
+                continue
+            if (now-timeof(prior_attempt["attempted_at"])).total_seconds() < 6*3600:
+                results.append(dict(base, status="DEFERRED", reason="reconciliation_backoff"))
+                continue
+        # Unknown/backed-off old requests do not starve later same-lane work.
+        used.add(lane)
+        try:
+            authority_matches(policy, exact_comment("12120"))
+            require(exact_matches(row, exact_comment(str(row["id"]))), "request_changed")
+            parse(row, policy, now)
+        except Exception:
+            results.append(dict(base, status="DEFERRED", reason="authority_or_request_changed"))
+            continue
         if old and old["state"] == "BRIDGE_VERIFIED":
             result = old["result"]
-        elif old:
-            results.append(dict(base, status="UNKNOWN", reason="prior_attempt_requires_reconciliation"))
-            continue
         else:
+            attempt = {"attempted_at":now.isoformat(), "attempts":(prior_attempt or {}).get("attempts", 0)+1}
+            if not journal.claim(key, fingerprint, attempt, old):
+                results.append(dict(base, status="DEFERRED", reason="concurrent_claim"))
+                continue
             try:
-                authority_matches(policy, exact_comment("12120"))
-                require(exact_matches(row, exact_comment(str(row["id"]))), "request_changed")
-                parse(row, policy, dt.datetime.now(dt.timezone.utc) if now is None else now)
-                if not journal.claim(key, fingerprint):
-                    results.append(dict(base, status="DEFERRED", reason="concurrent_claim"))
-                    continue
-                # invoke performs no mutation before its exact dry-run acceptance.
+                # Same request and payload only. Writes pass through the existing
+                # ingestion effect journal: native lookup precedes creation and
+                # unresolved prior creation refuses another POST. Reads may retry.
                 native = safe_result(obj["operation"], invoke(obj))
                 result = dict(base, outcome="SUCCESS", action_class="bounded_highlevel_request",
                               authority_ref=AUTHORITY, native_result=native,
@@ -195,9 +224,7 @@ def process(snapshot, policy, journal, exact_comment, invoke, publish, now, exec
                               whole_actor_replaced=False)
                 journal.save(key, fingerprint, "BRIDGE_VERIFIED", result)
             except Exception:
-                # If no claim happened no effect can have happened. Any claimed
-                # failure stays durable PENDING; no repeat write on next pass.
-                results.append(dict(base, status="DEFERRED", reason="authority_provider_or_readback"))
+                results.append(dict(base, status="DEFERRED", reason="provider_reconciliation_backoff"))
                 continue
         try:
             receipt = publish("RBO-97", "highlevel:"+key, result)

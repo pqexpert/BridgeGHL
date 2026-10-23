@@ -51,9 +51,9 @@ class QueueTests(unittest.TestCase):
         self.receipts.append(copy.deepcopy(result))
         return {"status":"VERIFIED", "native_readback":True, "comment_id":"12346"}
 
-    def run_queue(self, exact=None, invoke=None, publish=None, items=None):
+    def run_queue(self, exact=None, invoke=None, publish=None, items=None, now=NOW):
         return queue.process({"highlevel_request_candidates":items or [self.item]}, POLICY,
-            self.journal, exact or self.exact, invoke or self.invoke, publish or self.publish, NOW, True)
+            self.journal, exact or self.exact, invoke or self.invoke, publish or self.publish, now, True)
 
     def test_write_dedupes_and_preserves_exact_receipt(self):
         first = self.run_queue()
@@ -85,8 +85,9 @@ class QueueTests(unittest.TestCase):
             self.effects.append(obj)
             raise TimeoutError()
         self.run_queue(invoke=failure)
-        self.assertEqual(self.run_queue()["requests"][0]["status"], "UNKNOWN")
-        self.assertEqual(len(self.effects), 1)
+        self.assertEqual(self.run_queue()["requests"][0]["reason"], "reconciliation_backoff")
+        self.assertEqual(self.run_queue(now=NOW+dt.timedelta(hours=6))["requests"][0]["status"], "VERIFIED")
+        self.assertEqual(len(self.effects), 2)
         self.journal = queue.Journal(Path(self.tmp.name)/"second.sqlite3")
         self.effects.clear()
         self.run_queue(publish=lambda *args:{"status":"UNKNOWN", "native_readback":False})
@@ -98,11 +99,53 @@ class QueueTests(unittest.TestCase):
         def read(obj):
             return {"domain":"income", "native_readback":True, "source_id":obj["payload"]["source_id"],
                     "source_sha256":"a"*64, "source":{"title":"Checkpoint", "source_url":queue.AUTHORITY_URL,
-                    "content":"private content omitted", "properties":{"secret":"omitted"}}, "note_ids":["n"]}
+                    "content":"private content omitted", "properties":{"secret":"omitted"}}, "note_ids":["n"],
+                    "admission_projection":{"provider":"lever","board":"pingwind","job_id":"id","title":"Help Desk",
+                    "packet_id":"packet","do_not_submit":True,"duplicate_clear":True,"artifact_absent":False},
+                    "legacy_provenance_urls":["https://app.notion.com/p/original"]}
         self.run_queue(invoke=read)
         response = self.receipts[0]["native_result"]
         self.assertEqual(response["source"], {"title":"Checkpoint", "source_url":queue.AUTHORITY_URL})
         self.assertFalse(response["source_body_returned"])
+        self.assertFalse(response["admission_projection"]["artifact_absent"])
+        self.assertEqual(response["legacy_provenance_urls"], ["https://app.notion.com/p/original"])
+        self.assertFalse(response["execution_admitted"])
+
+    def test_receipt_recovery_rechecks_authority_and_unknown_does_not_starve(self):
+        self.run_queue(publish=lambda *args:{"status":"UNKNOWN", "native_readback":False})
+        self.authority["updated"] = "changed"
+        self.assertEqual(self.run_queue()["requests"][0]["reason"], "authority_or_request_changed")
+        self.assertEqual(len(self.effects), 1)
+        self.authority["updated"] = POLICY["authority"]["updated"]
+        self.journal = queue.Journal(Path(self.tmp.name)/"third.sqlite3")
+        def timeout(obj): raise TimeoutError()
+        self.run_queue(invoke=timeout)
+        later = copy.deepcopy(self.item)
+        later["id"] = "12347"
+        later["body"] = later["body"].replace("actual-plan-2026-10-23", "actual-plan-second")
+        result = self.run_queue(items=[self.item,later], exact=lambda cid:self.authority if cid=="12120" else later)
+        self.assertEqual([r["status"] for r in result["requests"]], ["DEFERRED", "VERIFIED"])
+
+    def test_native_adf_text_roundtrip_and_actual_reader_endpoint_shape(self):
+        import sys
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        sys.path.insert(0, str(Path(__file__).parents[1]/"scripts"))
+        from collect_native_sources import text_content
+        native = {"type":"doc", "version":1, "content":[{"type":"paragraph", "content":[{"type":"text", "text":self.item["body"]}]}]}
+        cached = dict(self.item, body=text_content(native))
+        fresh = dict(self.item, body=text_content(native).strip())
+        self.assertTrue(queue.exact_matches(cached, fresh))
+        self.assertEqual(queue.parse(cached,POLICY,NOW),queue.parse(fresh,POLICY,NOW))
+        import ingestion
+        from fastapi import FastAPI
+        bridge = SimpleNamespace(app=FastAPI(), require_api_key=lambda key:None,
+                                 AUDIT_LOG_PATH=str(Path(self.tmp.name)/"audit.log"), HIGHLEVEL_LOCATION_ID="location")
+        ingestion.register_routes(bridge)
+        endpoint = next(r.endpoint for r in bridge.app.routes if getattr(r,"path",None)=="/read/ingest/income-source")
+        response = {"domain":"income", "native_readback":True, "source_sha256":"a"*64}
+        with patch.object(ingestion,"configuration",return_value={"pipeline_id":"pipeline","default_contact_id":"contact"}), patch.object(ingestion,"read_income_source",return_value=response):
+            self.assertEqual(endpoint(ingestion.IncomeSourceRead(source_id="actual",contact_id="contact",current_source_sha256="a"*64),"key"),response)
 
     def test_narrow_operations_expiry_and_admission_rejected(self):
         import json
