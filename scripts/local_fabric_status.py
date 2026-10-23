@@ -62,6 +62,8 @@ def main():
     except (OSError,ValueError,TypeError):pass
     report={"observed_at":datetime.now(timezone.utc).isoformat(),"services":{u:unit(u) for u in UNITS},
             "local_health":health(),"proposal_receipts":receipts(),"recovery":recovery,
+            "operator_pause":{"requested":(STATE/"transport/operator-pause.json").exists(),
+                              "scope":"Local inference only; does not cancel remote provider effects"},
             "vps_live_check":"NOT_PERFORMED; active tunnel alone does not prove remote jobs or connectivity",
             "remote_evidence":"docs/fabric-cutover-execution.md (dated verified run links)",
             "work_state":"READY is availability, not a running job or autonomous mission",
