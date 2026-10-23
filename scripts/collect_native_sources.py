@@ -1,7 +1,8 @@
-"""Read-only native evidence collector. No inference, messages or domain writes.
+"""Collect native sources read-only; cron separately drains admitted Income research.
 
-Private snapshots prove retrieval, never specialist execution or writer handover.
-Uses existing root-only provider bindings and the existing host cron service.
+The collection function does not infer or mutate provider state. Its cron caller
+may invoke the bounded Income controller after collection. No external messages
+are sent; worker artifact/receipt effects have their own admission and evidence.
 """
 import datetime as dt
 import fcntl
