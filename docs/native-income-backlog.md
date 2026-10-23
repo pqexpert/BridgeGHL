@@ -27,8 +27,9 @@ Deploy the Bridge route first, then refresh the pinned continuation bundle.
 The refresh installs the selector and shared transport code only; it does not
 reconfigure SSH, change model weights/memory, invoke inference, or delete queue
 state. The existing provision workflow backlog-inspect mode prints local
-manifest property names and rejection counts without provider/model calls.
-This preview is historical metadata, not proof of current job eligibility.
+manifest property names and rejection counts, plus bounded live authority and
+current-source access diagnosis. It performs no model calls or provider writes.
+Historical metadata is not proof of current job eligibility.
 
 RSC daily work uses the same collector cadence through its separately pinned
 worker and bounded RBO-34 source helper. A missing helper is an isolated RSC

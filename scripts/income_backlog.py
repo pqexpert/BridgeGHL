@@ -109,7 +109,7 @@ def inspect_manifest(root=ROOT):
         if value and counts[role_url(row)] == 1: candidates += 1
         else: reasons[reason or "duplicate_role_identity"] += 1
     no_submit=collections.Counter(type(row.get("Do Not Auto Submit")).__name__+":"+str(row.get("Do Not Auto Submit"))[:60] for _,row,_ in rows)
-    return {"read_only":True,"provider_calls":0,"model_calls":0,
+    return {"read_only":True,"provider_reads":"bounded_live_diagnosis","model_calls":0,
             "no_submit_value_distribution":dict(no_submit),
             "binding_diagnosis":binding_diagnosis(),
             "discovery_records":len(rows),"historical_candidate_count":candidates,
