@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from income_source_reader import read_income_source, source_key, SourceReadError
+from ingestion import read_income_source, source_key, SourceReadError
 
 def setup_source(tmp_path, versions=1):
     sid, cid, oid = "legacy-source-id", "context", "opportunity"
