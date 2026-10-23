@@ -71,6 +71,35 @@ def manifest(root=ROOT):
         rows.append((sid,row,bindings[sid]))
     return sorted(rows),counts
 
+def binding_diagnosis():
+    """Root-only read diagnosis: no secret contents, model calls or writes."""
+    import importlib.util,stat,urllib.error
+    env=Path('/etc/bridgeghl/bridgeghl.env')
+    result={"read_only":True,"model_calls":0,"provider_mutations":0}
+    if env.exists():
+        meta=env.lstat()
+        result['binding_file']={"uid":meta.st_uid,"gid":meta.st_gid,"mode":oct(stat.S_IMODE(meta.st_mode)),
+                                "regular":stat.S_ISREG(meta.st_mode),"symlink":env.is_symlink()}
+    else:result['binding_file']={"exists":False}
+    stage='load_installed_selector'
+    try:
+        spec=importlib.util.spec_from_file_location('native_backlog_diagnosis',
+            '/opt/ziji-fabric/dispatch/continuation/native_income_backlog.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        stage='live_authority';module.authority();result[stage]='VERIFIED'
+        stage='current_bridge_backlog'
+        native=module.bridge('/read/ingest/income-backlog',{'cursor':0,'limit':8})
+        result[stage]={k:native.get(k) for k in ('scanned','next_cursor','total_discovery_records','rejection_counts','coverage')}
+        result[stage]['candidate_count']=len(native.get('items',[]))
+        result['status']='VERIFIED'
+    except Exception as exc:
+        safe={'native_research_authority_changed','jira_binding_scope_mismatch',
+              'bridge_binding_private_file_required','bridge_binding_unavailable','bridge_response_too_large'}
+        result.update(status='DEFERRED',stage=stage,error_type=type(exc).__name__)
+        if isinstance(exc,ValueError) and str(exc) in safe:result['reason']=str(exc)
+        if isinstance(exc,urllib.error.HTTPError):result['http_status']=exc.code
+    return result
+
 def inspect_manifest(root=ROOT):
     rows,counts = manifest(root)
     reasons = collections.Counter()
@@ -80,8 +109,9 @@ def inspect_manifest(root=ROOT):
         if value and counts[role_url(row)] == 1: candidates += 1
         else: reasons[reason or "duplicate_role_identity"] += 1
     no_submit=collections.Counter(type(row.get("Do Not Auto Submit")).__name__+":"+str(row.get("Do Not Auto Submit"))[:60] for _,row,_ in rows)
-    return {"read_only":True,"provider_calls":0,"model_calls":0,
+    return {"read_only":True,"provider_reads":"bounded_live_diagnosis","model_calls":0,
             "no_submit_value_distribution":dict(no_submit),
+            "binding_diagnosis":binding_diagnosis(),
             "discovery_records":len(rows),"historical_candidate_count":candidates,
             "historical_rejection_counts":dict(reasons),
             "property_names":sorted({k for _,row,_ in rows for k in row}),
