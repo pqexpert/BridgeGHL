@@ -9,7 +9,7 @@ import subprocess
 import urllib.request
 
 STATE=Path.home()/".local/share/ziji-local"
-UNITS=("ziji-local-model.service","ziji-local-tunnel.service","ziji-local-recovery.timer")
+UNITS=("ziji-local-model.service","ziji-local-llm.service","ziji-local-tunnel.service","ziji-local-recovery.timer")
 FIELDS=("ActiveState","SubState","NRestarts","ActiveEnterTimestamp","LastTriggerUSec","NextElapseUSecRealtime")
 
 def stamp(path):
@@ -84,7 +84,8 @@ def main():
     recovery={"status":"UNKNOWN"}
     try:
         path=STATE/"recovery-upload.json";value=private_json(path)
-        recovery={"status":"VERIFIED_ON_VPS" if value.get("verified") is True else "UNKNOWN", "receipt_modified_utc":stamp(path),
+        recovery={"status":"CACHED_VERIFIED_UPLOAD" if value.get("verified") is True else "UNKNOWN", "receipt_modified_utc":stamp(path),
+                  "coverage":"Historical upload receipt; not a current restore or live VPS check",
                   "github_backup":"Separate off-host receipt; not proved by this local file"}
     except (OSError,ValueError,TypeError):pass
     report={"observed_at":datetime.now(timezone.utc).isoformat(),"services":{u:unit(u) for u in UNITS},
@@ -94,6 +95,13 @@ def main():
             "vps_live_check":"NOT_PERFORMED; active tunnel alone does not prove remote jobs or connectivity",
             "remote_evidence":"docs/fabric-cutover-execution.md (dated verified run links)",
             "work_state":"READY is availability, not a running job or autonomous mission",
+            "cost_boundary":{
+                "whole_system_cloud_cost":"UNVERIFIED",
+                "billing_checked":False,
+                "local_inference_route":"Laptop loopback through existing SSH tunnel; no paid fallback in reviewed client",
+                "laptop_offline":"Native inference defers; independent hosted work and VPS/provider costs may continue",
+                "tailscale":"Not the inference transport verified by this status command",
+                "mission_completion":"Not inferred from service health, receipt count, queue size or file growth"},
             "this_refresh":{"model_calls":0,"external_api_calls":0,"ssh_calls":0,"service_changes":0}}
     print(json.dumps(report,indent=2))
 if __name__=="__main__":main()
