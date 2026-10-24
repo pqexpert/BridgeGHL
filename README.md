@@ -149,3 +149,7 @@ preserves protected configuration and reports only readiness booleans and
 provider status. Missing source credentials/mappings remain blockers, not
 claims of completed ingestion. Existing SSH host discovery is reused; it does
 not establish an independently pinned host identity.
+
+For Duck's verified local inference routes, visible logs and anomaly tasks,
+compact task prompt, cost boundaries, and proposed Wazuh metadata input, see
+[local inference operations](docs/local-inference-operations.md).

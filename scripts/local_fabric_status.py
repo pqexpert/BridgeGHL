@@ -9,7 +9,7 @@ import subprocess
 import urllib.request
 
 STATE=Path.home()/".local/share/ziji-local"
-UNITS=("ziji-local-model.service","ziji-local-llm.service","ziji-local-tunnel.service","ziji-local-recovery.timer")
+UNITS=("ziji-local-model.service","ziji-local-llm.service","ziji-local-tunnel.service","ziji-local-recovery.timer","ziji-omniroute.service")
 FIELDS=("ActiveState","SubState","NRestarts","ActiveEnterTimestamp","LastTriggerUSec","NextElapseUSecRealtime")
 
 def stamp(path):

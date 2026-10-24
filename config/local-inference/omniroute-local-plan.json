@@ -1,0 +1,11 @@
+{
+  "scope": "OmniRoute only; existing Fabric inference clients retain their current bindings",
+  "cloud_connections": "Disable active Codex connections; retain credentials for explicit operator rollback",
+  "nodes": [
+    {"type": "openai-compatible", "apiType": "chat", "providerIdSuffix": "duck-proposal", "name": "Duck local proposal", "prefix": "duck-proposal", "baseUrl": "http://127.0.0.1:18181/v1"},
+    {"type": "openai-compatible", "apiType": "chat", "providerIdSuffix": "duck-coder", "name": "Duck local coder", "prefix": "duck-coder", "baseUrl": "http://127.0.0.1:18081/v1"}
+  ],
+  "privacy": "No raw prompt/response logging enabled; local metadata observation is separate",
+  "fallback": "No combos or cloud fallback created",
+  "verification": "Read back connections; one serialized inference per local route; disabled cloud route must fail"
+}
