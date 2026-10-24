@@ -20,6 +20,7 @@ on:
       - provider_budget.py
       - scripts/project_actor_receipts.py
       - scripts/highlevel_request_queue.py
+      - scripts/income_source_discovery.py
       - config/highlevel-actor-policy.json
       - scripts/collect_native_sources.py
       - scripts/install_income_continuation.py
@@ -87,7 +88,7 @@ jobs:
           test "$REMOTE_HOST" = '74.208.52.45'
           printf '%s\n' '74.208.52.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIFH9lGiaAYMJi/KGGPAKPPz0dQGcCWdY8c6eLNlMr79' > ~/.ssh/known_hosts
           printf '%s' "$GITHUB_SHA" > DEPLOYED_SHA
-          tar -czf ingestion-release.tgz provider_budget.py scripts/project_actor_receipts.py scripts/highlevel_request_queue.py config/highlevel-actor-policy.json scripts/collect_native_sources.py scripts/install_income_continuation.py scripts/income_continuation_bundle.json app.py ingestion.py scripts/income_backlog.py scripts/income_workbench.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py scripts/record_highlevel_cutover.py DEPLOYED_SHA
+          tar -czf ingestion-release.tgz provider_budget.py scripts/project_actor_receipts.py scripts/highlevel_request_queue.py scripts/income_source_discovery.py config/highlevel-actor-policy.json scripts/collect_native_sources.py scripts/install_income_continuation.py scripts/income_continuation_bundle.json app.py ingestion.py scripts/income_backlog.py scripts/income_workbench.py journey_evidence.py scripts/ingest_drive.py scripts/runtime_ingestion_check.py scripts/configure_ecosystem.py scripts/project_career_fields.py scripts/accept_rsc_autonomy.py scripts/record_highlevel_cutover.py DEPLOYED_SHA
           remote_package="/tmp/bridgeghl-source.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}.tgz"
           scp -i ~/.ssh/bridgeghl ingestion-release.tgz "${REMOTE_USER}@${REMOTE_HOST}:${remote_package}"
           # RSC production explicitly opts into the bounded task envelope under
