@@ -8,7 +8,7 @@ From its terminal:
 python3 scripts/local_fabric_status.py
 ```
 
-The task reads only three user-service status summaries, the authenticated loopback health endpoint and selected metadata from existing local receipt files. The local bearer stays in memory and is never printed. It makes zero inference, external API or SSH calls and changes no service. Receipt timestamps are file modification times, not invented job completion timestamps. Local CLI receipts do not count every VPS-side job.
+The task reads four user-service status summaries (including the separate local coding model), the authenticated proposal-model loopback health endpoint and selected metadata from existing local receipt files. The local bearer stays in memory and is never printed. It makes zero inference, external API or SSH calls and changes no service. Receipt timestamps are file modification times, not invented job completion timestamps. Local CLI receipts do not count every VPS-side job.
 
 - **READY** means the local model endpoint can accept a request; it does not mean an agent is working.
 - An active tunnel is a local service observation, not proof of a live VPS round trip.
@@ -29,3 +29,5 @@ Existing deployment verification may save this owner-only (0600) JSON file with 
 Keep Duck awake and on AC when local inference is wanted; this is an operating instruction, not proof of its current power state. The VPS uses the existing hourly collector, source hashes and replay suppression. HighLevel work uses changed-state batches, not a real-time polling loop. Shared local inference capacity is one request at a time with no paid fallback. An empty or unchanged queue should remain idle.
 
 Income and RSC native work remain bounded portions of their missions. Store remains a hosted exception. Distiller writer ownership must follow its actual coordinated cutover receipt; local model readiness alone changes none of these boundaries.
+
+The `cost_boundary` field explicitly leaves whole-system cloud cost UNVERIFIED. This command does not inspect billing or hosted schedules. Laptop unavailability stops the dependent local inference path; VPS hosting, independent hosted jobs and provider subscriptions may still cost money. The inference path currently uses restricted SSH, even when Tailscale is online. Recovery upload results are labelled CACHED_VERIFIED_UPLOAD: the original receipt does not prove a current restore or live remote health.

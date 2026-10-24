@@ -55,6 +55,12 @@ class ContinuationStatus(unittest.TestCase):
                 self.assertIsNone(result['jira_comment_id']);self.assertEqual(result['completed_receipts'][0]['jira_comment_id'],'123')
         with patch.object(collector,'continuation',return_value={'status':'COMPLETED','exit_code':0,'started_at':'2026-10-23T09:59:00+00:00','observed_at':'2026-10-23T10:01:00+00:00','result_sha256':hashlib.sha256(json.dumps(json.loads(self.path(self.state+'latest.json').read_text()),sort_keys=True).encode()).hexdigest()}):
             self.assertTrue(m.observe(self.bundle,wake=True)['wake_ok'])
+    def test_supervised_wake_uses_bounded_launcher_and_requires_current_evidence(self):
+        with patch.object(collector,'continuation',return_value={'status':'TIMEOUT_RECONCILE_NATIVE_STATE'}) as invoke:
+            result=m.observe(self.bundle,wake=True,supervised=True)
+        invoke.assert_called_once_with(timeout=420,supervised=True)
+        self.assertFalse(result['wake_ok'])
+        self.assertFalse(result['native_receipt_readback'])
     def test_refresh_preserves_expired_queue_bytes(self):
         bundle=json.loads((Path(__file__).parents[1]/'scripts/income_continuation_bundle.json').read_text())
         self.write(self.files['collector'],bundle['collector'],raw=True)

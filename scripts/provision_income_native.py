@@ -27,7 +27,7 @@ def _server(payload):
         scope={"__name__":"continuation_install"}
         exec(compile(payload["installer"],"install_income_continuation.py","exec"),scope)
         if payload["mode"] in {"continuation", "continuation-refresh"}: return scope["install"](payload)
-        return scope["observe"](payload["continuation"], wake=payload["mode"] == "continuation-wake")
+        return scope["observe"](payload["continuation"], wake=payload["mode"] == "continuation-wake", supervised=payload["mode"] == "continuation-wake")
     source=payload["runtime"]
     if hashlib.sha256(source.encode()).hexdigest()!=payload["sha256"]:raise ValueError("runtime_hash")
     sys.path.insert(0,"/opt/ziji-fabric/native")
@@ -120,7 +120,7 @@ def deploy():
     remote="sudo -n python3 -c 'import json,sys; p=json.load(sys.stdin); s={\"__name__\":\"income_deploy\"}; exec(compile(p[\"source\"],\"income_deploy\",\"exec\"),s); print(json.dumps(s[\"server\"](p),sort_keys=True))'"
     cmd=["ssh","-i",str(Path.home()/".ssh/fabric-preflight"),"-o","BatchMode=yes","-o","ConnectTimeout=15",
          "-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(Path.home()/".ssh/fabric-known-hosts"),user+"@"+host,remote]
-    result=subprocess.run(cmd,input=json.dumps(payload),text=True,capture_output=True,timeout=300)
+    result=subprocess.run(cmd,input=json.dumps(payload),text=True,capture_output=True,timeout=450 if mode=="continuation-wake" else 300)
     if result.returncode:raise ValueError("remote_income_failure_details_withheld")
     report=json.loads(result.stdout)
     print(json.dumps(report,sort_keys=True))

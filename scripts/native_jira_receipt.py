@@ -52,7 +52,7 @@ def _publish(issue,key,receipt,call):
     h=headers();path=STATE/(digest({"issue":issue,"key":key})+".json")
     fingerprint=digest(receipt);prior=json.loads(path.read_text()) if path.exists() else None
     if prior and prior["request_hash"]!=fingerprint:raise ProbeError("receipt_id_conflict")
-    if prior and prior.get("status") in {"VERIFIED","EXISTING"}:return {k:prior[k] for k in ("status","comment_id","native_readback","replay_id")}
+    if prior and prior.get("status") in {"VERIFIED","EXISTING"} and prior.get("native_readback") is True:return {k:prior[k] for k in ("status","comment_id","native_readback","replay_id")}
     cid=lookup(issue,key,h,call)
     base={"issue":issue,"replay_id":key,"request_hash":fingerprint,"receipt":receipt,"observed_at":dt.datetime.now(dt.timezone.utc).isoformat()}
     if cid:
