@@ -98,8 +98,10 @@ def jira_snapshot(cfg, call=request):
             try:
                 from collect_rsc_source import snapshot as rsc_snapshot
                 rsc_work_source=rsc_snapshot(cfg,call)
+            except ImportError:
+                rsc_work_source={'source_verified':False,'reason':'rsc_source_helper_unavailable'}
             except Exception:
-                rsc_work_source={'source_verified':False,'reason':'rsc_source_unavailable'}
+                rsc_work_source={'source_verified':False,'reason':'rsc_source_read_unavailable'}
             return {'coverage':'all_issue_comments', 'comments_scanned':start, 'receipt_candidates':comments,
                     'income_admission_candidates':admissions, 'operational_authority_candidates':authority,
                     'highlevel_request_candidates':requests, 'rsc_work_source':rsc_work_source,
@@ -193,6 +195,11 @@ def collect(trigger='manual'):
                     'items':len(snapshot.get('receipt_candidates',snapshot.get('events',[]))),
                     'scanned':snapshot.get('comments_scanned',snapshot.get('events_scanned')),
                     'snapshot_sha256':hashlib.sha256(raw.encode()).hexdigest()}
+                if lane == 'jira':
+                    rsc = snapshot.get('rsc_work_source',{})
+                    report[lane]['rsc_source_verified'] = rsc.get('source_verified') is True
+                    if rsc.get('reason') in ('rsc_source_helper_unavailable','rsc_source_read_unavailable'):
+                        report[lane]['rsc_source_reason'] = rsc['reason']
             except Exception as e:
                 report[lane] = {'status':str(e) if isinstance(e,ProbeError) else 'collection_failed_details_withheld'}
         report['source_watch'] = source_watch_status(now)
@@ -212,6 +219,10 @@ def install(source, binding_source):
         raise ProbeError('existing_cron_conflict_preserved')
     atomic(ROOT/'bind_native_providers.py',binding_source)
     atomic(ROOT/'collect_native_sources.py',source)
+    # This installer also runs from compiled SSH input, where Python has not
+    # added the installed script directory as it does for the cron invocation.
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0,str(ROOT))
     result = collect('installation_validation')
     ready = all(result[x]['status']=='retrieved_and_persisted' for x in ('jira','calendar'))
     if ready:
