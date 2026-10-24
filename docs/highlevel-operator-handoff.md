@@ -1,5 +1,10 @@
 # HighLevel operational handoff
 
+Income daily use and interaction recording: [Income/HighLevel workflow](income-highlevel-workflow.md).
+The bounded workbench surfaces source work mode/type alongside current native
+owner/action/date. Bridge transport audit is metadata-only; capture on external
+channels still requires its actual verified binding and readback.
+
 Recorded native asset state: 2026-10-23. HighLevel is the operational destination for RSC/Income relationships, opportunities, working notes and evidence links. Notion remains historical archive/source aliases; Drive retains produced artifacts. Preserve original source IDs, legacy URLs, completed cache identities and receipts. Current native stages, assignments, DND and conversations are authoritative. See [ecosystem ownership](HIGHLEVEL-ECOSYSTEM-PLAN.md).
 
 ## Native assets

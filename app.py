@@ -6,6 +6,8 @@ import json
 import os
 import re
 import uuid
+import hashlib
+from urllib.parse import urlsplit
 
 import requests
 import time
@@ -317,19 +319,42 @@ def _highlevel_request(
                 raise HTTPException(429, str(deferred)) from None
         else:
             raise HTTPException(429, str(exc)) from None
-    response = requests.request(
-        method,
-        url,
-        headers=highlevel_headers(),
-        json=body,
-        params=params,
-        timeout=timeout,
-    )
+    from provider_budget import CURRENT
+    scope = CURRENT.get()
+    request_id = str(uuid.uuid4())
+    # No URL/query, target ID, headers, body, response content or exception text.
+    resource = urlsplit(url).path.strip('/').split('/')[0]
+    resource = resource if resource in {'contacts', 'opportunities', 'conversations',
+        'locations', 'forms', 'workflows', 'calendars', 'users'} else 'other'
+    metadata = {'action': 'provider_interaction', 'request_id': request_id,
+                'actor': scope[0] if scope else 'unscoped',
+                'method': method.upper() if method.upper() in {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'} else 'OTHER',
+                'resource': resource,
+                'target_sha256': hashlib.sha256(urlsplit(url).path.encode()).hexdigest()}
+
+    def attempt(number):
+        started = time.monotonic()
+        def record(result, **extra):
+            append_audit_log({**metadata, 'attempt': number, 'result': result,
+                'observed_at': datetime.now(timezone.utc).isoformat(), **extra})
+        # Audit failure here prevents the provider request. An intent without an
+        # outcome remains unresolved; it must never be read as provider success.
+        record('intent')
+        try:
+            response = requests.request(method, url, headers=highlevel_headers(),
+                                        json=body, params=params, timeout=timeout)
+        except Exception:
+            record('transport_unknown', elapsed_ms=round((time.monotonic()-started)*1000))
+            raise
+        record('response', provider_status=response.status_code,
+               elapsed_ms=round((time.monotonic()-started)*1000))
+        return response
+
+    response = attempt(1)
     # A transient provider read rejection must not replay a mutation.
     if retry_reads and not counted and method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
         time.sleep(2)
-        response = requests.request(method, url, headers=highlevel_headers(),
-                                    json=body, params=params, timeout=timeout)
+        response = attempt(2)
     if counted:
         observe(response.status_code, response.headers)
     try:
@@ -408,6 +433,8 @@ def append_audit_log(entry: dict):
     ensure_audit_dir()
     with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def caller_ip(request: Request) -> Optional[str]:
