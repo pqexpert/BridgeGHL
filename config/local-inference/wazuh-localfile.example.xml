@@ -1,0 +1,7 @@
+<!-- Merge inside the EXISTING ossec_config using an authorized administrator.
+     Example for Duck's current /home/jaden path. Metadata only, no model text.
+     This file is a proposal; it has not been installed or activated. -->
+<localfile>
+  <log_format>json</log_format>
+  <location>/home/jaden/.local/share/ziji-local/observability/events.jsonl</location>
+</localfile>

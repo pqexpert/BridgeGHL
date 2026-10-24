@@ -44,6 +44,54 @@
         "panel": "dedicated",
         "clear": true
       }
+    },
+    {
+      "label": "Ziji Fabric: local inference anomalies (no inference)",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/local_inference_observe.py"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Ziji Fabric: watch local inference and record metadata",
+      "type": "process",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/scripts/local_inference_observe.py",
+        "--watch",
+        "--record"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Ziji Fabric: live model logs",
+      "type": "process",
+      "command": "journalctl",
+      "args": [
+        "_SYSTEMD_USER_UNIT=ziji-local-model.service",
+        "_SYSTEMD_USER_UNIT=ziji-local-llm.service",
+        "--follow",
+        "--lines=30",
+        "--output=short-iso"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
     }
   ]
 }

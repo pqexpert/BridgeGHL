@@ -1,0 +1,14 @@
+<!-- Merge into an existing local rules file after checking rule ID collisions.
+     Validate with wazuh-logtest before restarting any Wazuh service. -->
+<group name="ziji_local_inference,">
+  <rule id="100810" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event_type">^local_inference_observation$</field>
+    <description>Ziji local inference metadata observation</description>
+  </rule>
+  <rule id="100811" level="7">
+    <if_sid>100810</if_sid>
+    <field name="anomaly_count" type="pcre2">^[1-9][0-9]*$</field>
+    <description>Ziji local inference requires operator attention</description>
+  </rule>
+</group>
