@@ -13,6 +13,16 @@ Under the October 24 supervised run-now direction (RBO-97:12171), `continuation-
 
 Root-private state is `/var/lib/ziji-fabric/dispatch/continuation`. `latest.json` holds worker evidence; `caller-latest.json` independently preserves timeout/exit status even when cron discards output. `state.json` preserves completed identities, backoff and daily reservations. Never clear it to retry or reset a budget.
 
+HighLevel-backed Jira admissions use the same source-bound CRM writeback helper
+as discovered native records. Native artifact/Jira proof and CRM readback are
+separate required stages. A previously verified draft explicitly marked
+`PENDING_HOSTED_BRIDGE` may finish only that handoff from its cached artifact,
+under a still-current admission and fresh native source/authority checks. It does
+not reserve another model call. Any failed CRM attempt retains the six-hour
+backoff; missing readback is not completion. Completed handoffs remain no-ops.
+The controller pin in the bundle identifies the implementation; deployment and
+actual recovery require their own native receipt.
+
 Pause: `touch /var/lib/ziji-fabric/dispatch/continuation/pause`. Resume: remove only that marker. An in-flight request may finish; subsequent passes defer. Duck's separate local pause stops the inference tunnel; the controller's cheap authenticated health preflight then defers before employer/provider calls.
 
 Only fresh, explicitly admitted canonical projections execute, for at most 36 hours after observation. Root may remove pending entries from `/etc/ziji-fabric/dispatch/income-queue.json` to revoke them. The queue does not harvest Notion or auto-admit source changes. Exhausted or stale queues wait truthfully for a canonical bridge refresh. Canonical artifact writeback remains a bridge responsibility. Hosted mission schedules retain uncovered scope.
