@@ -1,0 +1,25 @@
+[Unit]
+Description=Duck authenticated loopback OmniRoute gateway
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.omniroute
+Environment=PATH=/home/jaden/.nvm/versions/node/v26.12.1/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OMNIROUTE_SERVER_HOST=127.0.0.1
+Environment=REQUIRE_API_KEY=true
+ExecStart=/home/jaden/.nvm/versions/node/v26.12.1/bin/node /usr/local/lib/node_modules/omniroute/bin/omniroute.mjs serve --port 20128 --no-open --no-tray --no-recovery --log
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+NoNewPrivileges=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ziji-omniroute
+
+[Install]
+WantedBy=default.target

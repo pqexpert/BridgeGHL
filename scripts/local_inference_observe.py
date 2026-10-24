@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import time
+import urllib.error
 import urllib.request
 
 HOME = Path.home()
@@ -54,6 +55,28 @@ def health(port, folder=None):
             return "READY" if r.status == 200 and json.loads(raw).get("status") == "ok" else "NOT_READY"
     except Exception:
         return "UNAVAILABLE"
+
+
+def gateway_access():
+    """Check transport exposure and anonymous rejection without performing inference."""
+    rc, output = command(["ss", "-H", "-ltn"])
+    listeners = []
+    if rc == 0:
+        for line in output.splitlines():
+            fields = line.split()
+            if len(fields) >= 4 and fields[3].endswith(":20128"):
+                listeners.append(fields[3])
+    status = "UNKNOWN"
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+        with opener.open("http://127.0.0.1:20128/v1/models", timeout=3) as response:
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except Exception:
+        pass
+    return {"anonymous_models_http_status": status, "listeners": listeners,
+        "loopback_only": bool(listeners) and all(a in ("127.0.0.1:20128", "[::1]:20128") for a in listeners)}
 
 
 def omniroute():
@@ -104,7 +127,7 @@ def observe():
     for name, state in report["models"].items():
         if state != "READY":
             anomalies.append("LOCAL_MODEL_" + name.upper() + "_UNAVAILABLE")
-    report["services"] = {n: service(n, True) for n in ("ziji-local-model.service", "ziji-local-llm.service", "ziji-local-tunnel.service")}
+    report["services"] = {n: service(n, True) for n in ("ziji-local-model.service", "ziji-local-llm.service", "ziji-local-tunnel.service", "ziji-omniroute.service")}
     report["wazuh_services"] = {n: service(n) for n in ("wazuh-manager", "wazuh-indexer", "wazuh-dashboard")}
     report["wazuh_alerts"] = "NOT_INSPECTED_REQUIRES_AUTHORIZED_ADMIN_ACCESS"
     for name, value in {**report["services"], **report["wazuh_services"]}.items():
@@ -121,6 +144,11 @@ def observe():
     if memory.get("SwapTotal_KiB", 0) and memory.get("SwapFree_KiB", 0) < 1024 * 1024:
         anomalies.append("LOW_FREE_SWAP_ALLOCATION_IS_NOT_PAGING_RATE")
     report["omniroute_health"] = health(20128)
+    report["gateway_access"] = gateway_access()
+    if report["gateway_access"]["anonymous_models_http_status"] not in (401, 403):
+        anomalies.append("OMNIROUTE_ANONYMOUS_REJECTION_UNVERIFIED")
+    if not report["gateway_access"]["loopback_only"]:
+        anomalies.append("OMNIROUTE_LOOPBACK_LISTENER_UNVERIFIED")
     report["omniroute"] = omniroute()
     omni = report["omniroute"]
     if omni.get("status") != "READ_ONLY_SNAPSHOT":

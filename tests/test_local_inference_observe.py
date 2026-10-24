@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("local_observe", Path(__file__).resolve().parents[1] / "scripts/local_inference_observe.py")
@@ -37,6 +38,7 @@ class ObserverTests(unittest.TestCase):
             "local_only_key_policy": self.policy()}
         message = json.dumps({"MESSAGE": "PRIVATE_PROMPT_AND_TOKEN_DO_NOT_EXPORT", "PRIORITY": "3"})
         with patch.object(observer, "health", return_value="READY"), \
+                patch.object(observer, "gateway_access", return_value={"anonymous_models_http_status": 401, "loopback_only": True}), \
                 patch.object(observer, "service", return_value={"ActiveState": "active"}), \
                 patch.object(observer, "omniroute", return_value=omni), \
                 patch.object(observer, "command", return_value=(0, message)):
@@ -46,6 +48,24 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(result["journal"]["warning_or_higher"], 1)
         self.assertIn("OMNIROUTE_CUSTOM_NODE_OUTSIDE_LOOPBACK", result["anomalies"])
         self.assertIn("OMNIROUTE_CLOUD_CODEX_ENABLED", result["anomalies"])
+
+    def test_gateway_does_not_mistake_all_interface_listener_for_local_only(self):
+        listener = "LISTEN 0 511 0.0.0.0:20128 0.0.0.0:*\n"
+        denied = urllib.error.HTTPError("http://127.0.0.1:20128/v1/models", 401, "Unauthorized", {}, None)
+        with patch.object(observer, "command", return_value=(0, listener)), \
+                patch.object(observer.urllib.request.OpenerDirector, "open", side_effect=denied):
+            value = observer.gateway_access()
+        self.assertEqual(value["anonymous_models_http_status"], 401)
+        self.assertFalse(value["loopback_only"])
+
+    def test_gateway_rejects_redirect_without_forwarding(self):
+        redirected = urllib.error.HTTPError("http://127.0.0.1:20128/v1/models", 302, "Redirect", {}, None)
+        with patch.object(observer, "command", return_value=(0, "LISTEN 0 511 127.0.0.1:20128 0.0.0.0:*\n")), \
+                patch.object(observer.urllib.request.OpenerDirector, "open", side_effect=redirected) as request:
+            value = observer.gateway_access()
+        self.assertTrue(value["loopback_only"])
+        self.assertEqual(value["anonymous_models_http_status"], 302)
+        self.assertEqual(request.call_count, 1)
 
     def test_private_metadata_record_rejects_symlink_and_bounds_file(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(observer, "STATE", Path(tmp) / "observations"):

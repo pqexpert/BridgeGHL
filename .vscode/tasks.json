@@ -92,6 +92,23 @@
         "panel": "dedicated",
         "clear": true
       }
+    },
+    {
+      "label": "Ziji Fabric: live OmniRoute logs",
+      "type": "process",
+      "command": "journalctl",
+      "args": [
+        "_SYSTEMD_USER_UNIT=ziji-omniroute.service",
+        "--follow",
+        "--lines=30",
+        "--output=short-iso"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
     }
   ]
 }

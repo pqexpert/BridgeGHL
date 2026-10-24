@@ -1,4 +1,5 @@
 <!-- Merge into an existing local rules file after checking rule ID collisions.
+     First inventory equivalent installed rules/decoders and reuse them.
      Validate with wazuh-logtest before restarting any Wazuh service. -->
 <group name="ziji_local_inference,">
   <rule id="100810" level="3">
