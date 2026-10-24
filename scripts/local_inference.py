@@ -4,6 +4,26 @@ import argparse, hashlib, json, os, pathlib, sys, time, urllib.request, uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config/local-inference"
 STATE = pathlib.Path.home() / ".local/share/ziji-local"
+COMPLETIONS_URL = "http://127.0.0.1:18181/v1/chat/completions"
+MAX_RESPONSE_BYTES = 131072
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+def local_completion(body):
+    """One loopback request; proxy settings, redirects and paid retries are denied."""
+    key = (STATE / "api-key").read_text().strip()
+    request = urllib.request.Request(COMPLETIONS_URL,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type":"application/json", "Authorization":"Bearer "+key})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(request, timeout=240) as response:
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("Local response exceeds limit")
+    return json.loads(raw)
+
 def digest(path):
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -59,12 +79,8 @@ def main():
         "top_p":lock["top_p"],"top_k":lock["top_k"],"min_p":lock["min_p"],
         "seed":lock["seed"], "stream":False,
         "chat_template_kwargs":{"enable_thinking":False}}
-    key = (STATE / "api-key").read_text().strip()
-    request = urllib.request.Request("http://127.0.0.1:18181/v1/chat/completions",
-        data=json.dumps(body).encode(), headers={"Content-Type":"application/json", "Authorization":"Bearer "+key})
     started=time.monotonic()
-    with urllib.request.urlopen(request, timeout=240) as response:
-        result=json.load(response)
+    result=local_completion(body)
     message=result["choices"][0]["message"]
     if message.get("tool_calls"):
         raise ValueError("Unexpected tool request rejected")
@@ -72,7 +88,8 @@ def main():
     receipt={"id":str(uuid.uuid4()),"mode":"proposal_only","lane":args.lane,
         "model_sha256":lock["sha256"],"inputs":manifest,"elapsed_seconds":round(time.monotonic()-started,2),
         "usage":result.get("usage"),"input_sha256":hashlib.sha256(prompt.encode()).hexdigest(),
-        "output_sha256":hashlib.sha256(answer.encode()).hexdigest(),"external_effects":False}
+        "output_sha256":hashlib.sha256(answer.encode()).hexdigest(),"external_effects":False,
+        "inference_location":"laptop_loopback", "paid_fallback":False}
     receipts=STATE/"receipts"
     receipts.mkdir(mode=0o700,exist_ok=True)
     (receipts/(receipt["id"]+".json")).write_text(json.dumps(receipt,indent=2)+"\n")
