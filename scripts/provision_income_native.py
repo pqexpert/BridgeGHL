@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-PIN = "9c85cb323c5b9e420f0bbd20bff0273f56ed8d9e"
+PIN = "f74878dd8c59636b8a8c948670242605225295e4"
 
 def _server(payload):
     import sys
