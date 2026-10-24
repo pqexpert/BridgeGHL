@@ -238,6 +238,12 @@ def continuation(timeout=300, supervised=False):
     if not worker.exists(): return
     if worker.is_symlink() or worker.stat().st_uid != 0 or worker.stat().st_mode & 0o022:
         raise ProbeError('continuation_source_permissions')
+    discovery = None
+    if Path('/home/bridgeadmin/apps/BridgeGHL/scripts/income_source_discovery.py').exists():
+        try:
+            discovery = actor_projection(timeout=150, script_name='income_source_discovery.py')
+        except Exception:
+            discovery = {'status':'DEFERRED', 'model_calls':0}
     started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
         run = subprocess.run(['/usr/bin/python3', str(worker)]+(['--drain'] if supervised else []), stdout=subprocess.PIPE,
@@ -255,6 +261,7 @@ def continuation(timeout=300, supervised=False):
                 result['status'] = 'NO_CURRENT_RESULT'
     except subprocess.TimeoutExpired:
         result = {'stage':'INCOME_CONTINUATION_CALL', 'status':'TIMEOUT_RECONCILE_NATIVE_STATE'}
+    result['source_discovery'] = discovery
     result['started_at'] = started_at
     result['observed_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
     atomic(Path('/var/lib/ziji-fabric/dispatch/continuation/caller-latest.json'), json.dumps(result, sort_keys=True))
@@ -275,7 +282,7 @@ def rsc_continuation(timeout=240):
         return {'stage':'RSC_CONTINUATION_CALL','status':'TIMEOUT_RECONCILE_NATIVE_STATE'}
 
 def actor_projection(timeout=240, script_name='project_actor_receipts.py'):
-    if script_name not in ('project_actor_receipts.py', 'highlevel_request_queue.py'):
+    if script_name not in ('project_actor_receipts.py', 'highlevel_request_queue.py', 'income_source_discovery.py'):
         raise ProbeError('actor_projection_scope')
     import subprocess
     script = Path('/home/bridgeadmin/apps/BridgeGHL/scripts') / script_name
