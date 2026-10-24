@@ -11,6 +11,20 @@ sys.path.insert(0,str(Path(__file__).parents[1]/'scripts'))
 import collect_native_sources as m
 
 class NativeSources(unittest.TestCase):
+    def test_compiled_install_can_import_its_installed_owning_source_helper(self):
+        import importlib
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);source=root/'source';source.mkdir()
+            name='fabric_install_resolution_regression'
+            (source/(name+'.py')).write_text('verified = True\n')
+            self.addCleanup(lambda:sys.modules.pop(name,None))
+            def collect(trigger):
+                self.assertTrue(importlib.import_module(name).verified)
+                return {'jira':{'status':'retrieved_and_persisted'},'calendar':{'status':'retrieved_and_persisted'}}
+            with patch.object(m,'ROOT',source),patch.object(m,'CRON',root/'cron'),patch.object(m.os,'geteuid',return_value=0),patch.object(m,'collect',side_effect=collect),patch.object(sys,'path',list(sys.path)):
+                self.assertNotIn(str(source),sys.path)
+                self.assertTrue(m.install('source','bindings')['cron_installed'])
+
     def test_jira_complete_pagination_and_no_execution_inference(self):
         cfg={'email':'owner@example.com','api_token':'secret','base_url':m.JIRA_ROOT,'project_allowlist':['RBO']}
         calls=[]
