@@ -41,6 +41,8 @@ Local inference cannot remove VPS rental, provider subscriptions, GitHub usage, 
 
 ## Remaining acceptance, in order
 
+October 24 continuation: RBO-97:12171 records supervised run-now authority. Income wake 40061006513 read the next eight records and found only non-internal context; zero new model reservations. RSC launch 40061008291 was cancelled before any execution steps after RBO-34:12143 disclosed unresolved source defects. RSC PR68 repairs those defects; Dispatch PR17 adds a finite supervised drain while preserving the hourly cadence and existing safeguards. Source merges remain distinct from the subsequent protected deployment and useful execution receipts.
+
 1. Recover the current hosted schedule inventory and billing/credit ledger. Match each retained hosted unit to uncovered mission scope. Retire only a demonstrated native equivalent under the existing handover procedure; reconcile residual weekly work as well as daily work. Verify subsequent usage over the next billing observation interval.
 2. Continue Income's existing bounded scan/cursor on its existing cadence. Preserve explicit admission/no-submit controls and completed artifacts. An empty bounded page is a truthful no-op; do not create synthetic work or widen eligibility to make the queue look busy.
 3. Prove each remaining useful RSC/Income unit with source identity, admitted scope, local inference usage if needed, native result and durable receipt. Keep Store data outside this work. Retain existing writer ownership and recover uncertain effects before retry.

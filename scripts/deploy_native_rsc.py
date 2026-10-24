@@ -2,6 +2,18 @@
 import hashlib,json,os,re,subprocess
 from pathlib import Path
 
+def install_receipt(payload, atomic):
+    source=payload["receipt_source"]
+    expected=payload["receipt_sha256"]
+    if hashlib.sha256(source.encode()).hexdigest()!=expected:raise ValueError("receipt_source_hash")
+    path=Path("/opt/ziji-fabric/native/native_jira_receipt.py")
+    if path.is_symlink() or not path.is_file() or path.stat().st_uid!=0 or path.stat().st_mode & 0o022:
+        raise ValueError("receipt_source_permissions")
+    if hashlib.sha256(path.read_bytes()).hexdigest() not in (payload["receipt_previous_sha256"],expected):
+        raise ValueError("receipt_source_changed_preserved")
+    atomic(path,source)
+    if hashlib.sha256(path.read_bytes()).hexdigest()!=expected:raise ValueError("receipt_source_readback")
+
 def remote(payload):
     if os.geteuid()!=0:raise ValueError("root_required")
     import sys
@@ -20,6 +32,7 @@ def remote(payload):
         if destination.read_text()!=value:raise ValueError("source_readback")
     mode=payload.get("mode","stage")
     if mode not in ("stage","daily","launch17"):raise ValueError("invalid_mode")
+    install_receipt(payload,atomic)
     if mode=="stage":
         return {"stage":"RSC_DAILY_STAGED","outcome":"NO_CHANGE","model_calls":0,"cron_created":False}
     args=["python3",str(root/"native_rsc.py")]+(["--daily"] if mode=="daily" else [])
@@ -40,6 +53,9 @@ def main():
     user,host=os.environ["REMOTE_USER"],os.environ["REMOTE_HOST"]
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*",user) or not re.fullmatch(r"[A-Za-z0-9.:-]+",host):raise ValueError("ssh_target")
     payload={"mode":os.environ.get("RSC_MODE","stage"),"source":Path(__file__).read_text(),"bundle":json.loads(Path(__file__).with_name("native_rsc_bundle.json").read_text())}
+    receipt=Path(__file__).with_name("native_jira_receipt.py").read_text()
+    payload.update(receipt_source=receipt,receipt_sha256=hashlib.sha256(receipt.encode()).hexdigest(),
+        receipt_previous_sha256="bf9f9295ee94895bc73bd83ca774dd6424c319e1a2d4e378af9849b1c964e746")
     command="sudo -n python3 -c 'import json,sys; p=json.load(sys.stdin); s={\"__name__\":\"deploy_rsc\"}; exec(compile(p[\"source\"],\"deploy_rsc\",\"exec\"),s); print(json.dumps(s[\"remote\"](p),sort_keys=True))'"
     args=["ssh","-i",str(Path.home()/".ssh/fabric-preflight"),"-o","BatchMode=yes","-o","ConnectTimeout=15","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile="+str(Path.home()/".ssh/fabric-known-hosts"),user+"@"+host,command]
     run=subprocess.run(args,input=json.dumps(payload),text=True,capture_output=True,timeout=300)

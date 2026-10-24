@@ -25,6 +25,19 @@ class Receipts(unittest.TestCase):
                 return {"startAt":0,"total":1,"comments":[row]} if "/comment?" in url else row
             with self.assertRaisesRegex(r.ProbeError,"jira_receipt_content_mismatch"):
                 r.publish("RBO-34","rsc:scope:reconcile",{"lane":"rsc","outcome":"SUCCESS"},call)
+    def test_cached_acknowledgement_without_readback_recovers_existing_receipt(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,"headers",return_value={}):
+            r.STATE=pathlib.Path(d)
+            key="rsc:scope:reconcile";data={"lane":"rsc","outcome":"SUCCESS"}
+            path=r.STATE/(r.digest({"issue":"RBO-34","key":key})+".json")
+            path.write_text(r.json.dumps({"status":"VERIFIED","native_readback":False,"request_hash":r.digest(data)}))
+            row={"id":"9","body":{"type":"doc","content":[{"type":"text","text":"FABRIC_FINDING "+key+"\n"+r.json.dumps(data,sort_keys=True)}]}}
+            def call(url,headers=None,body=None):
+                self.assertIsNone(body)
+                return {"startAt":0,"total":1,"comments":[row]} if "/comment?" in url else row
+            result=r.publish("RBO-34",key,data,call)
+            self.assertEqual(result["status"],"EXISTING")
+            self.assertTrue(result["native_readback"])
     def test_unknown_absence_never_reposts(self):
         with tempfile.TemporaryDirectory() as d,patch.object(r,"headers",return_value={}):
             r.STATE=pathlib.Path(d);posts=[]

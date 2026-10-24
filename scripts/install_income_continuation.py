@@ -130,7 +130,7 @@ def install(payload):
             return receipt
 
 
-def observe(bundle, wake=False):
+def observe(bundle, wake=False, supervised=False):
     """Pure local status; wake explicitly runs one admitted useful controller pass."""
     if os.geteuid() != 0: raise ValueError("root_required")
     from collect_native_sources import continuation
@@ -157,7 +157,7 @@ def observe(bundle, wake=False):
     caller = load(state / "caller-latest.json")
     if wake:
         if validated:
-            caller = continuation(timeout=240) or {"status":"WORKER_MISSING"}
+            caller = (continuation(timeout=420,supervised=True) if supervised else continuation(timeout=240)) or {"status":"WORKER_MISSING"}
         else:
             caller = {"status":"INSTALLATION_NOT_VALIDATED"}
     ledger = load(state / "state.json")
@@ -200,7 +200,7 @@ def observe(bundle, wake=False):
             "daily_model_reservations":len(ledger.get("model_days",{}).get(today,[])) if isinstance(ledger.get("model_days",{}).get(today,[]),list) else 1,
             "backlog_observation":ledger.get("backlog_observation"),
             "latest":{k:latest[k] for k in ("status","reason","phase","observed_at",
-                       "artifact_sha256","canonical_writeback") if k in latest},
+                       "artifact_sha256","canonical_writeback","supervised") if k in latest},
             "caller":{k:caller[k] for k in ("status","exit_code","started_at","observed_at") if k in caller},
             "jira_comment_id":receipt.get("comment_id"),
             "native_receipt_readback":receipt.get("native_readback", False),

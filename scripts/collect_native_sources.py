@@ -220,7 +220,7 @@ def install(source, binding_source):
     result['calendar_writer_enabled'] = False
     return result
 
-def continuation(timeout=300):
+def continuation(timeout=300, supervised=False):
     # Separate admitted worker; collection remains read-only. No extra scheduler.
     import subprocess
     worker = Path('/opt/ziji-fabric/dispatch/continuation/income_continuation.py')
@@ -229,7 +229,7 @@ def continuation(timeout=300):
         raise ProbeError('continuation_source_permissions')
     started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     try:
-        run = subprocess.run(['/usr/bin/python3', str(worker)], stdout=subprocess.PIPE,
+        run = subprocess.run(['/usr/bin/python3', str(worker)]+(['--drain'] if supervised else []), stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, timeout=timeout)
         result = {'stage':'INCOME_CONTINUATION_CALL', 'exit_code':run.returncode,
                   'status':'COMPLETED' if run.returncode == 0 else 'FAILED',
