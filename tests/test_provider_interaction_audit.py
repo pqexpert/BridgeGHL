@@ -57,6 +57,39 @@ def test_missing_pre_request_audit_prevents_effect(transport, monkeypatch):
     assert calls == []
 
 
+def test_post_response_audit_failure_returns_correlated_unresolved(transport, monkeypatch):
+    calls = []
+    original_append = app.append_audit_log
+
+    def fail_response(entry):
+        if entry.get('result') == 'response':
+            raise OSError('audit unavailable after provider response')
+        original_append(entry)
+
+    monkeypatch.setattr(app, 'append_audit_log', fail_response)
+    monkeypatch.setattr(app.requests, 'request', lambda *a, **kw: (
+        calls.append(1) or SimpleNamespace(status_code=200, json=lambda: {'id': 'created'})
+    ))
+
+    with pytest.raises(app.HTTPException) as excinfo:
+        app._highlevel_request(
+            'POST',
+            'https://provider.invalid/contacts/id/notes',
+            body={'body': 'MESSAGE_SECRET'},
+            retry_reads=False,
+        )
+
+    assert calls == [1]
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail['error'] == 'provider_mutation_outcome_unknown'
+    assert excinfo.value.detail['audit_id']
+    assert excinfo.value.detail['provider_status'] == 200
+    assert excinfo.value.detail['audit_persistence'] == 'failed_after_provider_response'
+    events = [json.loads(s) for s in transport.read_text().splitlines()]
+    assert [event['result'] for event in events] == ['intent']
+    assert events[0]['request_id'] == excinfo.value.detail['audit_id']
+
+
 def test_existing_unscoped_read_retry_has_separate_attempt_evidence(transport, monkeypatch):
     responses = iter((503, 200))
     monkeypatch.setattr(app.time, 'sleep', lambda _: None)
