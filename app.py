@@ -346,8 +346,24 @@ def _highlevel_request(
         except Exception:
             record('transport_unknown', elapsed_ms=round((time.monotonic()-started)*1000))
             raise
-        record('response', provider_status=response.status_code,
-               elapsed_ms=round((time.monotonic()-started)*1000))
+        try:
+            record('response', provider_status=response.status_code,
+                   elapsed_ms=round((time.monotonic()-started)*1000))
+        except Exception as exc:
+            if method.upper() in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+                # The provider returned, so the mutation may have completed even
+                # though its response evidence could not be persisted. Return a
+                # correlated UNRESOLVED result and never invite a blind retry.
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        'error': 'provider_mutation_outcome_unknown',
+                        'audit_id': request_id,
+                        'provider_status': response.status_code,
+                        'audit_persistence': 'failed_after_provider_response',
+                    },
+                ) from exc
+            raise
         return response
 
     response = attempt(1)
