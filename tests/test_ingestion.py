@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
@@ -110,6 +111,54 @@ def test_cross_location_contact_stops_before_notes(monkeypatch, tmp_path):
     ingestion.register_routes(bridge)
     with pytest.raises(HTTPException): routes['/execute/ingest/source-record'](record(), 'key')
     assert calls == ['GET']
+
+
+
+def test_structured_provider_outcome_unknown_survives_ingestion(monkeypatch, tmp_path):
+    routes = {}
+    monkeypatch.setenv("HIGHLEVEL_INGEST_ENABLED", "true")
+    monkeypatch.setenv("HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID", "contact1")
+
+    def provider(method, url, **kw):
+        path = url.removeprefix("https://provider")
+        if path == "/contacts/contact1":
+            return 200, {"contact": {"id": "contact1", "locationId": "loc"}}
+        if path == "/contacts/contact1/notes" and method == "GET":
+            return 200, {"notes": []}
+        if path == "/contacts/contact1/notes" and method == "POST":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "provider_mutation_outcome_unknown",
+                    "audit_id": "provider-interaction-3",
+                    "provider_status": 201,
+                    "audit_persistence": "failed_after_provider_response",
+                },
+            )
+        raise AssertionError((method, path))
+
+    audit_path = tmp_path / "audit.jsonl"
+    bridge = SimpleNamespace(
+        app=SimpleNamespace(post=lambda p: lambda f: routes.setdefault(p, f)),
+        require_api_key=lambda k: None,
+        highlevel_request=provider,
+        HIGHLEVEL_BASE_URL="https://provider",
+        HIGHLEVEL_LOCATION_ID="loc",
+        AUDIT_LOG_PATH=str(audit_path),
+        append_audit_log=lambda e: None,
+        bridge_health_snapshot=lambda: SimpleNamespace(state="HEALTHY"),
+    )
+    ingestion.register_routes(bridge)
+
+    with pytest.raises(HTTPException) as exc:
+        routes["/execute/ingest/source-record"](record(), "key")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["error"] == "provider_mutation_outcome_unknown"
+    assert exc.value.detail["audit_id"] == "provider-interaction-3"
+    with sqlite3.connect(tmp_path / "ingestion.sqlite3") as db:
+        state = db.execute("SELECT state FROM effects").fetchone()[0]
+    assert state == "pending"
 
 
 def test_export_preserves_status_and_links_without_inventing_email():
