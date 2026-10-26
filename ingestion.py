@@ -189,6 +189,8 @@ def register_routes(bridge):
     def call(method, path, **kwargs):
         try:
             status, data = bridge.highlevel_request(method, bridge.HIGHLEVEL_BASE_URL.rstrip('/') + path, **kwargs)
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(502, 'Provider transport failed; inspect native state before retry')
         if not 200 <= status < 300:
