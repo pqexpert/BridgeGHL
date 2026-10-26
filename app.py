@@ -1026,6 +1026,19 @@ def execute_contact_tags(
         verification=verification,
     )
 
+
+def provider_mutation_outcome_unknown(exc: BaseException) -> Optional[dict]:
+    """Return sanitized low-level correlation only for a known unresolved mutation."""
+    if not isinstance(exc, HTTPException) or not isinstance(exc.detail, dict):
+        return None
+    if exc.detail.get("error") != "provider_mutation_outcome_unknown":
+        return None
+    return {
+        key: exc.detail[key]
+        for key in ("audit_id", "provider_status", "audit_persistence")
+        if key in exc.detail
+    }
+
 @app.post("/dry-run/task/create", response_model=DryRunResponse)
 def dry_run_task_create(
     payload: TaskCreateRequest,
@@ -1205,7 +1218,10 @@ def execute_task_create(
             )
             projected = project_task(readback_data) if 200 <= readback_status < 300 else {}
             statuses.append({"operation": "read_task", "status": readback_status})
-    except requests.RequestException as exc:
+    except (requests.RequestException, HTTPException) as exc:
+        provider_interaction = provider_mutation_outcome_unknown(exc)
+        if isinstance(exc, HTTPException) and provider_interaction is None:
+            raise
         append_audit_log({
             "audit_id": audit_id,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -1219,11 +1235,15 @@ def execute_task_create(
             "verified": False,
             "result": "provider_mutation_outcome_unknown",
             "error_type": type(exc).__name__,
+            "provider_interaction": provider_interaction,
         })
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "provider_mutation_outcome_unknown", "audit_id": audit_id},
-        ) from exc
+        detail = {"error": "provider_mutation_outcome_unknown", "audit_id": audit_id}
+        if provider_interaction:
+            detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
+            for key in ("provider_status", "audit_persistence"):
+                if key in provider_interaction:
+                    detail[key] = provider_interaction[key]
+        raise HTTPException(status_code=503, detail=detail) from exc
     verification = verify_task(projected, normalized) if projected else {"ok": False, "checks": []}
     verified = bool(200 <= write_status < 300 and verification["ok"])
     effect = "CREATED" if verified else "UNRESOLVED"
@@ -1373,7 +1393,10 @@ def execute_task_delete(
             list_absence = list_status == 200 and task_absent_from_complete_list(
                 list_data, normalized.contact_id, normalized.task_id, normalized.action_key
             )
-    except requests.RequestException as exc:
+    except (requests.RequestException, HTTPException) as exc:
+        provider_interaction = provider_mutation_outcome_unknown(exc)
+        if isinstance(exc, HTTPException) and provider_interaction is None:
+            raise
         append_audit_log({
             "audit_id": audit_id,
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -1390,12 +1413,19 @@ def execute_task_delete(
             "verified": False,
             "result": "provider_mutation_outcome_unknown",
             "error_type": type(exc).__name__,
+            "provider_interaction": provider_interaction,
         })
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "provider_mutation_outcome_unknown", "audit_id": audit_id,
-                    "task_id": normalized.task_id},
-        ) from exc
+        detail = {
+            "error": "provider_mutation_outcome_unknown",
+            "audit_id": audit_id,
+            "task_id": normalized.task_id,
+        }
+        if provider_interaction:
+            detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
+            for key in ("provider_status", "audit_persistence"):
+                if key in provider_interaction:
+                    detail[key] = provider_interaction[key]
+        raise HTTPException(status_code=503, detail=detail) from exc
     absence_verified = readback_status == 404 or list_absence
     verified = 200 <= delete_status < 300 and absence_verified
     verification = {
