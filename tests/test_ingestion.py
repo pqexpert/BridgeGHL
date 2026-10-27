@@ -114,7 +114,10 @@ def test_cross_location_contact_stops_before_notes(monkeypatch, tmp_path):
 
 
 
-def test_structured_provider_outcome_unknown_survives_ingestion(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider_status", [201, 400, 401, 403, 404, 422])
+def test_structured_provider_outcome_unknown_survives_ingestion(
+    monkeypatch, tmp_path, provider_status
+):
     routes = {}
     monkeypatch.setenv("HIGHLEVEL_INGEST_ENABLED", "true")
     monkeypatch.setenv("HIGHLEVEL_INGEST_INCOME_DEFAULT_CONTACT_ID", "contact1")
@@ -131,7 +134,7 @@ def test_structured_provider_outcome_unknown_survives_ingestion(monkeypatch, tmp
                 detail={
                     "error": "provider_mutation_outcome_unknown",
                     "audit_id": "provider-interaction-3",
-                    "provider_status": 201,
+                    "provider_status": provider_status,
                     "audit_persistence": "failed_after_provider_response",
                 },
             )
