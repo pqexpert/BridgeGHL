@@ -90,6 +90,41 @@ def test_post_response_audit_failure_returns_correlated_unresolved(transport, mo
     assert events[0]['request_id'] == excinfo.value.detail['audit_id']
 
 
+def test_rate_limit_observation_survives_response_audit_failure(transport, monkeypatch):
+    observed = []
+    original_append = app.append_audit_log
+
+    def fail_response(entry):
+        if entry.get('result') == 'response':
+            raise OSError('audit unavailable after provider response')
+        original_append(entry)
+
+    monkeypatch.setattr(provider_budget, 'reserve', lambda: True)
+    monkeypatch.setattr(
+        provider_budget, 'observe',
+        lambda status, headers: observed.append((status, dict(headers))),
+    )
+    monkeypatch.setattr(app, 'append_audit_log', fail_response)
+    monkeypatch.setattr(app.requests, 'request', lambda *a, **kw: SimpleNamespace(
+        status_code=429,
+        headers={'Retry-After': '60', 'X-RateLimit-Daily-Remaining': '0'},
+        json=lambda: {},
+    ))
+
+    with pytest.raises(app.HTTPException):
+        app._highlevel_request(
+            'POST',
+            'https://provider.invalid/contacts/id/notes',
+            body={'body': 'MESSAGE_SECRET'},
+            retry_reads=False,
+        )
+
+    assert observed == [(429, {
+        'Retry-After': '60',
+        'X-RateLimit-Daily-Remaining': '0',
+    })]
+
+
 def test_existing_unscoped_read_retry_has_separate_attempt_evidence(transport, monkeypatch):
     responses = iter((503, 200))
     monkeypatch.setattr(app.time, 'sleep', lambda _: None)
