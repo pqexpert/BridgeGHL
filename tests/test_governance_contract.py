@@ -306,6 +306,98 @@ def test_task_delete_preserves_task_audit_identity_for_structured_unresolved(mon
     assert entries[1]["provider_interaction"]["audit_id"] == "provider-interaction-2"
 
 
+def test_task_create_preserves_503_when_final_audit_write_fails(monkeypatch):
+    calls = iter([
+        (200, {"contact": {"id": "contact-1", "locationId": "test-location"}}),
+        (200, {"tasks": []}),
+    ])
+    events = []
+
+    def provider(method, url, **kwargs):
+        if method == "POST":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "provider_mutation_outcome_unknown",
+                    "audit_id": "provider-interaction-4",
+                    "provider_status": 201,
+                    "audit_persistence": "failed_after_provider_response",
+                },
+            )
+        return next(calls)
+
+    def audit(entry):
+        if entry.get("phase") == "final":
+            raise OSError("audit sink remains unavailable")
+        events.append(entry)
+
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", provider)
+    monkeypatch.setattr(bridge, "append_audit_log", audit)
+
+    with pytest.raises(HTTPException) as exc:
+        bridge.execute_task_create(task_request(), http_request(), x_api_key="test-key")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["audit_id"] == events[0]["audit_id"]
+    assert exc.value.detail["provider_interaction_audit_id"] == "provider-interaction-4"
+    assert exc.value.detail["task_audit_persistence"] == "failed_after_intent"
+    assert [entry["phase"] for entry in events] == ["intent"]
+
+
+def test_task_delete_preserves_503_when_final_audit_write_fails(monkeypatch):
+    payload = bridge.TaskDeleteRequest(
+        contact_id="contact-1",
+        task_id="task-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:17",
+        reason="isolated cleanup",
+    )
+    calls = iter([
+        (200, {"contact": {"id": "contact-1", "locationId": "test-location"}}),
+        (200, {"task": {
+            "id": "task-1",
+            "contactId": "contact-1",
+            "title": bridge.task_title(payload.action_key),
+        }}),
+    ])
+    events = []
+
+    def provider(method, url, **kwargs):
+        if method == "DELETE":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "provider_mutation_outcome_unknown",
+                    "audit_id": "provider-interaction-5",
+                    "provider_status": 204,
+                    "audit_persistence": "failed_after_provider_response",
+                },
+            )
+        return next(calls)
+
+    def audit(entry):
+        if entry.get("phase") == "final":
+            raise OSError("audit sink remains unavailable")
+        events.append(entry)
+
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", provider)
+    monkeypatch.setattr(bridge, "append_audit_log", audit)
+
+    with pytest.raises(HTTPException) as exc:
+        bridge.execute_task_delete(payload, http_request(), x_api_key="test-key")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail["audit_id"] == events[0]["audit_id"]
+    assert exc.value.detail["provider_interaction_audit_id"] == "provider-interaction-5"
+    assert exc.value.detail["task_audit_persistence"] == "failed_after_intent"
+    assert [entry["phase"] for entry in events] == ["intent"]
+
+
 def test_task_success_audit_persists_native_readback(monkeypatch, tmp_path):
     payload = task_request()
     calls = iter([
