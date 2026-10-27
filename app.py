@@ -346,6 +346,9 @@ def _highlevel_request(
         except Exception:
             record('transport_unknown', elapsed_ms=round((time.monotonic()-started)*1000))
             raise
+        # Provider limit evidence must survive a response-audit failure.
+        if counted:
+            observe(response.status_code, response.headers)
         try:
             record('response', provider_status=response.status_code,
                    elapsed_ms=round((time.monotonic()-started)*1000))
@@ -371,8 +374,6 @@ def _highlevel_request(
     if retry_reads and not counted and method.upper() == 'GET' and response.status_code in (401, 429, 502, 503, 504):
         time.sleep(2)
         response = attempt(2)
-    if counted:
-        observe(response.status_code, response.headers)
     try:
         data = response.json()
     except ValueError:
@@ -1039,6 +1040,15 @@ def provider_mutation_outcome_unknown(exc: BaseException) -> Optional[dict]:
         if key in exc.detail
     }
 
+
+def append_unresolved_audit(entry: dict) -> bool:
+    """Finalize an existing durable intent when possible without losing its 503."""
+    try:
+        append_audit_log(entry)
+    except Exception:
+        return False
+    return True
+
 @app.post("/dry-run/task/create", response_model=DryRunResponse)
 def dry_run_task_create(
     payload: TaskCreateRequest,
@@ -1222,7 +1232,7 @@ def execute_task_create(
         provider_interaction = provider_mutation_outcome_unknown(exc)
         if isinstance(exc, HTTPException) and provider_interaction is None:
             raise
-        append_audit_log({
+        audit_persisted = append_unresolved_audit({
             "audit_id": audit_id,
             "ts": datetime.now(timezone.utc).isoformat(),
             "action": "create_task",
@@ -1238,6 +1248,8 @@ def execute_task_create(
             "provider_interaction": provider_interaction,
         })
         detail = {"error": "provider_mutation_outcome_unknown", "audit_id": audit_id}
+        if not audit_persisted:
+            detail["task_audit_persistence"] = "failed_after_intent"
         if provider_interaction:
             detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
             for key in ("provider_status", "audit_persistence"):
@@ -1397,7 +1409,7 @@ def execute_task_delete(
         provider_interaction = provider_mutation_outcome_unknown(exc)
         if isinstance(exc, HTTPException) and provider_interaction is None:
             raise
-        append_audit_log({
+        audit_persisted = append_unresolved_audit({
             "audit_id": audit_id,
             "ts": datetime.now(timezone.utc).isoformat(),
             "action": "delete_task",
@@ -1420,6 +1432,8 @@ def execute_task_delete(
             "audit_id": audit_id,
             "task_id": normalized.task_id,
         }
+        if not audit_persisted:
+            detail["task_audit_persistence"] = "failed_after_intent"
         if provider_interaction:
             detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
             for key in ("provider_status", "audit_persistence"):
