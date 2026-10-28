@@ -398,6 +398,88 @@ def test_task_delete_preserves_503_when_final_audit_write_fails(monkeypatch):
     assert [entry["phase"] for entry in events] == ["intent"]
 
 
+def test_task_create_finalizes_unresolved_when_readback_budget_blocks(monkeypatch, tmp_path):
+    calls = []
+
+    def provider(method, url, **kwargs):
+        calls.append((method, url))
+        if method == "GET" and url.endswith("/contacts/contact-1"):
+            return 200, {"contact": {"id": "contact-1", "locationId": "test-location"}}
+        if method == "GET" and url.endswith("/contacts/contact-1/tasks"):
+            return 200, {"tasks": []}
+        if method == "POST":
+            return 201, {"task": {"id": "task-1"}}
+        if method == "GET" and url.endswith("/contacts/contact-1/tasks/task-1"):
+            raise HTTPException(status_code=429, detail="request_daily_budget")
+        raise AssertionError((method, url))
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "AUDIT_LOG_PATH", str(audit))
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", provider)
+
+    with pytest.raises(HTTPException) as exc:
+        bridge.execute_task_create(task_request(), http_request(), x_api_key="test-key")
+
+    entries = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert exc.value.status_code == 503
+    assert exc.value.detail["error"] == "provider_mutation_outcome_unknown"
+    assert exc.value.detail["audit_id"] == entries[0]["audit_id"] == entries[1]["audit_id"]
+    assert [entry["phase"] for entry in entries] == ["intent", "final"]
+    assert entries[1]["effect"] == "UNRESOLVED"
+    assert entries[1]["provider_interaction"] is None
+    assert calls[-2][0] == "POST"
+    assert calls[-1][0] == "GET"
+
+
+def test_task_delete_finalizes_unresolved_when_readback_budget_blocks(monkeypatch, tmp_path):
+    payload = bridge.TaskDeleteRequest(
+        contact_id="contact-1",
+        task_id="task-1",
+        action_key="launch17-next-action:v1:location1:form1:submission1:17",
+        reason="isolated cleanup",
+    )
+    calls = []
+
+    def provider(method, url, **kwargs):
+        calls.append((method, url))
+        if method == "GET" and url.endswith("/contacts/contact-1"):
+            return 200, {"contact": {"id": "contact-1", "locationId": "test-location"}}
+        if method == "GET" and url.endswith("/contacts/contact-1/tasks/task-1") and len(calls) == 2:
+            return 200, {"task": {
+                "id": "task-1",
+                "contactId": "contact-1",
+                "title": bridge.task_title(payload.action_key),
+            }}
+        if method == "DELETE":
+            return 204, {}
+        if method == "GET" and url.endswith("/contacts/contact-1/tasks/task-1"):
+            raise HTTPException(status_code=429, detail="request_daily_budget")
+        raise AssertionError((method, url))
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(bridge, "API_KEY", "test-key")
+    monkeypatch.setattr(bridge, "HIGHLEVEL_LOCATION_ID", "test-location")
+    monkeypatch.setattr(bridge, "AUDIT_LOG_PATH", str(audit))
+    monkeypatch.setattr(bridge, "execute_guard", lambda action: None)
+    monkeypatch.setattr(bridge, "highlevel_request", provider)
+
+    with pytest.raises(HTTPException) as exc:
+        bridge.execute_task_delete(payload, http_request(), x_api_key="test-key")
+
+    entries = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert exc.value.status_code == 503
+    assert exc.value.detail["error"] == "provider_mutation_outcome_unknown"
+    assert exc.value.detail["audit_id"] == entries[0]["audit_id"] == entries[1]["audit_id"]
+    assert [entry["phase"] for entry in entries] == ["intent", "final"]
+    assert entries[1]["effect"] == "UNRESOLVED"
+    assert entries[1]["provider_interaction"] is None
+    assert calls[-2][0] == "DELETE"
+    assert calls[-1][0] == "GET"
+
+
 def test_task_success_audit_persists_native_readback(monkeypatch, tmp_path):
     payload = task_request()
     calls = iter([
