@@ -1211,6 +1211,7 @@ def execute_task_create(
     task_id = ""
     readback_status: Optional[int] = None
     projected: dict = {}
+    mutation_returned = False
     try:
         write_status, write_data = highlevel_request(
             "POST",
@@ -1219,6 +1220,7 @@ def execute_task_create(
             timeout=15,
             retry_reads=False,
         )
+        mutation_returned = True
         statuses.append({"operation": "create_task", "status": write_status})
         created = unwrap_record(write_data, "task") if 200 <= write_status < 300 else {}
         task_id = str(created.get("id") or "")
@@ -1230,7 +1232,14 @@ def execute_task_create(
             statuses.append({"operation": "read_task", "status": readback_status})
     except (requests.RequestException, HTTPException) as exc:
         provider_interaction = provider_mutation_outcome_unknown(exc)
-        if isinstance(exc, HTTPException) and provider_interaction is None:
+        # An HTTPException before the provider mutation is safe to surface as-is.
+        # Once the mutation returned, any readback exception leaves its effect
+        # unresolved and must finalize the existing task audit identity.
+        if (
+            isinstance(exc, HTTPException)
+            and provider_interaction is None
+            and not mutation_returned
+        ):
             raise
         audit_persisted = append_unresolved_audit({
             "audit_id": audit_id,
@@ -1384,6 +1393,7 @@ def execute_task_delete(
         "statuses": statuses,
         "result": "intent_persisted",
     })
+    mutation_returned = False
     try:
         delete_status, _ = highlevel_request(
             "DELETE",
@@ -1391,6 +1401,7 @@ def execute_task_delete(
             timeout=15,
             retry_reads=False,
         )
+        mutation_returned = True
         statuses.append({"operation": "delete_task", "status": delete_status})
         readback_status, _ = highlevel_request(
             "GET", contact_task_endpoint(normalized.contact_id, normalized.task_id), timeout=15
@@ -1407,7 +1418,14 @@ def execute_task_delete(
             )
     except (requests.RequestException, HTTPException) as exc:
         provider_interaction = provider_mutation_outcome_unknown(exc)
-        if isinstance(exc, HTTPException) and provider_interaction is None:
+        # An HTTPException before the provider mutation is safe to surface as-is.
+        # Once the mutation returned, any readback exception leaves its effect
+        # unresolved and must finalize the existing task audit identity.
+        if (
+            isinstance(exc, HTTPException)
+            and provider_interaction is None
+            and not mutation_returned
+        ):
             raise
         audit_persisted = append_unresolved_audit({
             "audit_id": audit_id,
