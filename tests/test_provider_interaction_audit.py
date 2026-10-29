@@ -90,6 +90,40 @@ def test_post_response_audit_failure_returns_correlated_unresolved(transport, mo
     assert events[0]['request_id'] == excinfo.value.detail['audit_id']
 
 
+def test_budget_observation_failure_after_mutation_response_is_correlated(transport, monkeypatch):
+    calls = []
+
+    def fail_observation(status, headers):
+        raise OSError("budget database unavailable")
+
+    monkeypatch.setattr(provider_budget, 'reserve', lambda: True)
+    monkeypatch.setattr(provider_budget, 'observe', fail_observation)
+    monkeypatch.setattr(app.requests, 'request', lambda *a, **kw: (
+        calls.append(1) or SimpleNamespace(
+            status_code=201,
+            headers={'X-RateLimit-Daily-Remaining': '99'},
+            json=lambda: {'id': 'created'},
+        )
+    ))
+
+    with pytest.raises(app.HTTPException) as excinfo:
+        app._highlevel_request(
+            'POST',
+            'https://provider.invalid/contacts/id/notes',
+            body={'body': 'MESSAGE_SECRET'},
+            retry_reads=False,
+        )
+
+    assert calls == [1]
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail['error'] == 'provider_mutation_outcome_unknown'
+    assert excinfo.value.detail['provider_status'] == 201
+    assert excinfo.value.detail['budget_observation'] == 'failed_after_provider_response'
+    events = [json.loads(s) for s in transport.read_text().splitlines()]
+    assert [event['result'] for event in events] == ['intent', 'response']
+    assert events[0]['request_id'] == events[1]['request_id'] == excinfo.value.detail['audit_id']
+
+
 def test_rate_limit_observation_survives_response_audit_failure(transport, monkeypatch):
     observed = []
     original_append = app.append_audit_log
