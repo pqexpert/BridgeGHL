@@ -346,9 +346,15 @@ def _highlevel_request(
         except Exception:
             record('transport_unknown', elapsed_ms=round((time.monotonic()-started)*1000))
             raise
-        # Provider limit evidence must survive a response-audit failure.
+        # Provider limit evidence must survive a response-audit failure. If
+        # budget observation itself fails after a mutation response, persist the
+        # response evidence before returning a correlated unresolved result.
+        observation_error = None
         if counted:
-            observe(response.status_code, response.headers)
+            try:
+                observe(response.status_code, response.headers)
+            except Exception as exc:
+                observation_error = exc
         try:
             record('response', provider_status=response.status_code,
                    elapsed_ms=round((time.monotonic()-started)*1000))
@@ -357,16 +363,30 @@ def _highlevel_request(
                 # The provider returned, so the mutation may have completed even
                 # though its response evidence could not be persisted. Return a
                 # correlated UNRESOLVED result and never invite a blind retry.
+                detail = {
+                    'error': 'provider_mutation_outcome_unknown',
+                    'audit_id': request_id,
+                    'provider_status': response.status_code,
+                    'audit_persistence': 'failed_after_provider_response',
+                }
+                if observation_error is not None:
+                    detail['budget_observation'] = 'failed_after_provider_response'
+                raise HTTPException(status_code=503, detail=detail) from exc
+            if observation_error is not None:
+                raise observation_error from exc
+            raise
+        if observation_error is not None:
+            if method.upper() in {'POST', 'PUT', 'PATCH', 'DELETE'}:
                 raise HTTPException(
                     status_code=503,
                     detail={
                         'error': 'provider_mutation_outcome_unknown',
                         'audit_id': request_id,
                         'provider_status': response.status_code,
-                        'audit_persistence': 'failed_after_provider_response',
+                        'budget_observation': 'failed_after_provider_response',
                     },
-                ) from exc
-            raise
+                ) from observation_error
+            raise observation_error
         return response
 
     response = attempt(1)
@@ -1036,7 +1056,7 @@ def provider_mutation_outcome_unknown(exc: BaseException) -> Optional[dict]:
         return None
     return {
         key: exc.detail[key]
-        for key in ("audit_id", "provider_status", "audit_persistence")
+        for key in ("audit_id", "provider_status", "audit_persistence", "budget_observation")
         if key in exc.detail
     }
 
@@ -1261,7 +1281,7 @@ def execute_task_create(
             detail["task_audit_persistence"] = "failed_after_intent"
         if provider_interaction:
             detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
-            for key in ("provider_status", "audit_persistence"):
+            for key in ("provider_status", "audit_persistence", "budget_observation"):
                 if key in provider_interaction:
                     detail[key] = provider_interaction[key]
         raise HTTPException(status_code=503, detail=detail) from exc
@@ -1393,6 +1413,7 @@ def execute_task_delete(
         "statuses": statuses,
         "result": "intent_persisted",
     })
+    delete_status: Optional[int] = None
     mutation_returned = False
     try:
         delete_status, _ = highlevel_request(
@@ -1418,6 +1439,40 @@ def execute_task_delete(
             )
     except (requests.RequestException, HTTPException) as exc:
         provider_interaction = provider_mutation_outcome_unknown(exc)
+        definitive_rejection = delete_status in {400, 401, 403, 404, 422}
+        if definitive_rejection and provider_interaction is None:
+            # The provider definitively rejected the mutation. A later readback
+            # failure is separate evidence and must not relabel the mutation as
+            # possibly completed.
+            audit_persisted = append_unresolved_audit({
+                "audit_id": audit_id,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "action": "delete_task",
+                "mode": "execute",
+                "phase": "final",
+                "target_id": normalized.contact_id,
+                "action_key": normalized.action_key,
+                "task_id": normalized.task_id,
+                "readback_before": before,
+                "identity_verification": identity,
+                "effect": "NO_EFFECT_PROVIDER_REJECTED",
+                "statuses": statuses,
+                "verified": False,
+                "result": "provider_rejected",
+                "provider_status": delete_status,
+                "readback": "unavailable",
+                "error_type": type(exc).__name__,
+            })
+            detail = {
+                "error": "provider_rejected",
+                "audit_id": audit_id,
+                "task_id": normalized.task_id,
+                "provider_status": delete_status,
+                "readback": "unavailable",
+            }
+            if not audit_persisted:
+                detail["task_audit_persistence"] = "failed_after_intent"
+            raise HTTPException(status_code=502, detail=detail) from exc
         # An HTTPException before the provider mutation is safe to surface as-is.
         # Once the mutation returned, any readback exception leaves its effect
         # unresolved and must finalize the existing task audit identity.
@@ -1454,7 +1509,7 @@ def execute_task_delete(
             detail["task_audit_persistence"] = "failed_after_intent"
         if provider_interaction:
             detail["provider_interaction_audit_id"] = provider_interaction.get("audit_id")
-            for key in ("provider_status", "audit_persistence"):
+            for key in ("provider_status", "audit_persistence", "budget_observation"):
                 if key in provider_interaction:
                     detail[key] = provider_interaction[key]
         raise HTTPException(status_code=503, detail=detail) from exc
