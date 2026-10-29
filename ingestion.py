@@ -189,6 +189,8 @@ def register_routes(bridge):
     def call(method, path, **kwargs):
         try:
             status, data = bridge.highlevel_request(method, bridge.HIGHLEVEL_BASE_URL.rstrip('/') + path, **kwargs)
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(502, 'Provider transport failed; inspect native state before retry')
         if not 200 <= status < 300:
@@ -221,7 +223,12 @@ def register_routes(bridge):
         try:
             native_id = create()
         except HTTPException as exc:
-            if isinstance(exc.detail,dict) and exc.detail.get('provider_status') in (400,401,403,404,422):
+            # Only a definitive provider rejection can reopen this key. A
+            # structured unknown may have completed and must stay pending even
+            # when the provider status happened to be a 4xx.
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if (detail.get('error') == 'provider_rejected'
+                    and detail.get('provider_status') in (400,401,403,404,422)):
                 db.execute('UPDATE effects SET state=? WHERE key=?',('rejected',key));db.commit()
             raise
         db.execute('UPDATE effects SET native_id=? WHERE key=?', (native_id, key))

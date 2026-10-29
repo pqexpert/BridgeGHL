@@ -26,8 +26,11 @@ A new task is posted only when no exact match exists. The bridge then reads the 
 
 Immediately before POST or DELETE, the bridge persists an audit intent. It then
 finalizes the same audit identity with bounded native readback and verification.
-A provider timeout after the intent is `UNRESOLVED`; callers receive the audit
-ID and must inspect native state before retrying.
+A provider timeout or post-response audit-persistence failure after the intent
+is `UNRESOLVED`. Callers receive the task-level audit ID and must inspect
+native state before retrying. When available, the lower-level provider
+interaction is retained separately as `provider_interaction_audit_id`; it never
+replaces the task audit identity.
 
 ## Routes
 
